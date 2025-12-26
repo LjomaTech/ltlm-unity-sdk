@@ -125,6 +125,33 @@ namespace LTLM.SDK.Unity
         /// </summary>
         public LicenseData ActiveLicense => _activeLicense;
 
+        // ============================================================
+        // EVENTS - Subscribe to these to be notified of SDK state changes
+        // ============================================================
+
+        /// <summary>
+        /// Fired when validation starts (including auto-validation on startup).
+        /// Use this to show a loading indicator.
+        /// </summary>
+        public static event Action OnValidationStarted;
+
+        /// <summary>
+        /// Fired when validation completes (success or failure).
+        /// Parameters: (bool success, LicenseStatus status)
+        /// Use this to hide loading and update UI.
+        /// </summary>
+        public static event Action<bool, LicenseStatus> OnValidationCompleted;
+
+        /// <summary>
+        /// Fired when license status changes.
+        /// </summary>
+        public static event Action<LicenseStatus> OnLicenseStatusChanged;
+
+        /// <summary>
+        /// Fired after tokens are consumed.
+        /// </summary>
+        public static event Action<LicenseData> OnTokensConsumed;
+
         private void Awake()
         {
             if (Instance != null)
@@ -173,6 +200,8 @@ namespace LTLM.SDK.Unity
             }
             else
             {
+                // Fire events so UI knows there's no stored license
+                OnValidationCompleted?.Invoke(false, LicenseStatus.Unauthenticated);
                 onError?.Invoke("No stored license found.");
             }
         }
@@ -181,6 +210,9 @@ namespace LTLM.SDK.Unity
         {
             if (_isValidating) return;
             _isValidating = true;
+            
+            // Fire event so UI can show loading state
+            OnValidationStarted?.Invoke();
 
             var request = new ActivationRequest
             {
@@ -202,6 +234,9 @@ namespace LTLM.SDK.Unity
                 {
                     _isValidating = false;
                     _activeLicense = license;
+                    var status = GetLicenseStatus();
+                    OnValidationCompleted?.Invoke(true, status);
+                    OnLicenseStatusChanged?.Invoke(status);
                     CacheLicense(license);
                     SecureStorage.Save("license_key_" + projectId, licenseKey, DeviceID.GetHWID());
                     SecureStorage.Save("last_successful_sync_" + projectId, SecureClock.GetEffectiveTime(projectId).Ticks.ToString(), DeviceID.GetHWID());
@@ -216,6 +251,7 @@ namespace LTLM.SDK.Unity
                 },
                 err => {
                     _isValidating = false;
+                    OnValidationCompleted?.Invoke(false, LicenseStatus.Unauthenticated);
                     onError?.Invoke(err);
                 }
             ));
@@ -225,6 +261,9 @@ namespace LTLM.SDK.Unity
         {
             if (_isValidating) return;
             _isValidating = true;
+            
+            // Fire event so UI can show loading state
+            OnValidationStarted?.Invoke();
             
             var request = new ActivationRequest
             {
@@ -246,6 +285,9 @@ namespace LTLM.SDK.Unity
                 {
                     _isValidating = false;
                     _activeLicense = license;
+                    var status = GetLicenseStatus();
+                    OnValidationCompleted?.Invoke(true, status);
+                    OnLicenseStatusChanged?.Invoke(status);
                     CacheLicense(license);
                     SecureStorage.Save("last_successful_sync_" + projectId, SecureClock.GetEffectiveTime(projectId).Ticks.ToString(), DeviceID.GetHWID());
                     ProcessEnforcement(license);
@@ -254,7 +296,7 @@ namespace LTLM.SDK.Unity
                         return;
                     }
                     StartHeartbeat();
-                    onSuccess?.Invoke(license, GetLicenseStatus());
+                    onSuccess?.Invoke(license, status);
                     SyncPendingConsumptions();
                 },
                 err => {
@@ -262,10 +304,13 @@ namespace LTLM.SDK.Unity
                     Debug.LogWarning("[LTLM] Network Validation Failed. Checking offline grace...");
                     if (CheckOfflineGraceTimeout())
                     {
-                        onSuccess?.Invoke(_activeLicense, GetLicenseStatus());
+                        var status = GetLicenseStatus();
+                        OnValidationCompleted?.Invoke(true, status);
+                        onSuccess?.Invoke(_activeLicense, status);
                     }
                     else
                     {
+                        OnValidationCompleted?.Invoke(false, LicenseStatus.ConnectionRequired);
                         onError?.Invoke("Offline grace period exceeded or no cached license found.");
                     }
                 }

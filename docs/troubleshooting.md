@@ -1,223 +1,209 @@
-# Troubleshooting Guide
+# Troubleshooting
 
-Solutions to common issues with the LTLM Unity SDK.
-
----
-
-## Installation Issues
-
-### "Settings not found in Resources"
-
-**Cause**: `LTLMSettings.asset` is missing or not in the correct location.
-
-**Solution**:
-1. Open **LTLM → Project Settings**
-2. The editor will create the asset automatically
-3. Or manually create: **Create → LTLM → Settings**
-4. Ensure it's in `Assets/LTLM/Resources/LTLMSettings.asset`
+Solutions to common issues.
 
 ---
 
-### Missing BouncyCastle or Newtonsoft.Json
+## Activation Issues
 
-**Cause**: Dependencies not imported correctly.
+### "Invalid license key"
 
-**Solution**:
-1. Check `Assets/LTLM/Plugins/` for DLLs
-2. If missing, re-import the package
-3. For Newtonsoft.Json: Install via Package Manager
-   - **Add package by name**: `com.unity.nuget.newtonsoft-json`
+**Cause:** The license key was not found or has a typo.
 
----
-
-### Assembly Definition Errors
-
-**Cause**: Missing assembly references after import.
-
-**Solution**:
-1. Delete `Library/` folder to force recompile
-2. Ensure all `.asmdef` files are present:
-   - `LTLM.Core.asmdef`
-   - `LTLM.Unity.asmdef`
-   - `LTLM.Editor.asmdef`
-   - `LTLM.Demos.asmdef`
+**Solution:**
+1. Double-check the key for typos
+2. Ensure no extra spaces before or after the key
+3. Verify the key exists in your dashboard
 
 ---
 
-## Authentication Issues
+### "License already activated on another device"
 
-### "Invalid signature"
+**Cause:** The license has reached its activation limit.
 
-**Cause**: Public key mismatch.
-
-**Solution**:
-1. Re-fetch keys from dashboard
-2. Ensure public key includes PEM headers:
-   ```
-   -----BEGIN PUBLIC KEY-----
-   ...
-   -----END PUBLIC KEY-----
-   ```
-3. Use **LTLM → Project Settings → Login** to inject keys
+**Solution:**
+1. Deactivate the license on the old device
+2. Or contact support to release a device slot
+3. Or upgrade to a license with more activations
 
 ---
 
-### "Decryption failed"
+### "Version not allowed"
 
-**Cause**: Secret key is incorrect or malformed.
+**Cause:** Your app version is not compatible with this license.
 
-**Solution**:
-1. Verify secret key is exactly 64 characters (hex)
-2. Check for accidental spaces or line breaks
-3. Re-copy from dashboard
-
----
-
-### "HWID mismatch"
-
-**Cause**: Hardware configuration changed.
-
-**Solution**:
-1. Normal after hardware upgrade
-2. User needs to re-activate (counts against limit)
-3. Admin can release old machine from dashboard
+**Solution:**
+1. Update your app to the latest version
+2. Or check the version restrictions in your dashboard
 
 ---
 
-### "Activation limit reached"
+## Network Issues
 
-**Cause**: License used on maximum number of machines.
+### "Connection failed" or "Timeout"
 
-**Solution**:
-1. Check dashboard for registered machines
-2. Release unused machines
-3. Upgrade to policy with higher limit
+**Cause:** Network connectivity issue.
 
----
-
-## Runtime Issues
-
-### "Connection required" in offline mode
-
-**Cause**: Offline grace period exceeded.
-
-**Solution**:
-1. Connect to internet and restart app
-2. License will auto-validate on connection
-3. Consider increasing grace period in policy
-
----
-
-### "Clock tampering detected"
-
-**Cause**: System clock was rolled back.
-
-**Solution**:
-1. Correct system time
-2. Restart application
-3. If persists, clear license cache and re-activate
-
----
-
-### Heartbeat not working
-
-**Symptoms**: Active seats not updating, stale sessions.
-
-**Solution**:
-1. Check `heartbeatIntervalSeconds` is set
-2. Verify network connectivity
-3. Check console for heartbeat errors
-4. Ensure coroutine is running (not stopped on scene load)
-
----
-
-### Tokens not syncing
-
-**Cause**: Background sync failing.
-
-**Solution**:
+**Solution:**
 1. Check internet connection
-2. Call `SyncPendingConsumptions()` manually
-3. Check for pending consumption count:
-   ```csharp
-   int pending = LTLMManager.Instance.GetPendingConsumptionCount();
-   Debug.Log($"Pending: {pending}");
-   ```
+2. Check if your firewall is blocking the connection
+3. Try again in a few seconds
 
 ---
 
-## Platform-Specific Issues
+### "Unable to connect to server"
 
-### Windows: Registry access denied
+**Cause:** Server may be temporarily unavailable.
 
-**Cause**: Permissions issue with registry.
-
-**Solution**:
-1. Run as administrator (for testing)
-2. Check antivirus isn't blocking
-3. SDK falls back gracefully if registry unavailable
+**Solution:**
+1. Wait a few minutes and try again
+2. Check [status.ltlm.io](https://status.ltlm.io) for outages
+3. Contact support if the issue persists
 
 ---
 
-### Android: License not persisting
+## Token Issues
 
-**Cause**: `persistentDataPath` cleared.
+### "Insufficient tokens"
 
-**Solution**:
-1. Don't use "Clear Data" in app settings
-2. Check `AndroidManifest.xml` for backup rules
-3. Verify app has storage permissions
+**Cause:** Not enough tokens to perform the action.
 
----
-
-### iOS: Build fails with crypto errors
-
-**Cause**: Stripping crypto code.
-
-**Solution**:
-1. Add to `link.xml`:
-   ```xml
-   <assembly fullname="BouncyCastle.Cryptography">
-     <type fullname="*" preserve="all"/>
-   </assembly>
-   ```
+**Solution:**
+1. Check your token balance
+2. Purchase more tokens via the top-up feature
+3. Wait for token reset if you have a subscription
 
 ---
 
-### WebGL: Limited functionality
+### Tokens not updating after purchase
 
-**Cause**: WebGL has no secure storage.
+**Cause:** License data not refreshed.
 
-**Solution**:
-1. Expected behavior - WebGL uses PlayerPrefs
-2. Enable server-side validation for critical checks
-3. Consider WebGL as "untrusted client"
-
----
-
-## Debug Logging
-
-Enable verbose logging by searching console for `[LTLM]`:
-
-```
-[LTLM] SDK Bootstrapped and ready.
-[LTLM] License validated successfully.
-[LTLM] Starting heartbeat cycle (300s interval)
-[LTLM] Token sync successful. Server balance: 847
-[LTLM] SECURITY ALERT: Clock tampering detected!
+**Solution:**
+```csharp
+// Force refresh the license data
+LTLMManager.Instance.ValidateLicense(
+    LTLMManager.Instance.ActiveLicense.licenseKey,
+    (license, status) => {
+        Debug.Log("New balance: " + license.tokensRemaining);
+    },
+    error => Debug.LogError(error)
+);
 ```
 
 ---
 
-## Getting Help
+## Startup Issues
+
+### App stuck on loading screen
+
+**Cause:** Waiting for validation with no feedback.
+
+**Solution:** Subscribe to validation events:
+
+```csharp
+void Start()
+{
+    LTLMManager.OnValidationStarted += () => ShowLoading("Checking license...");
+    LTLMManager.OnValidationCompleted += (success, status) => {
+        HideLoading();
+        if (!success)
+        {
+            ShowActivationScreen();
+        }
+    };
+}
+```
+
+---
+
+### "No stored license found"
+
+**Cause:** No previously activated license exists.
+
+**Solution:** This is normal for new users. Show the activation screen.
+
+```csharp
+LTLMManager.OnValidationCompleted += (success, status) => {
+    if (status == LicenseStatus.Unauthenticated)
+    {
+        ShowActivationScreen();
+    }
+};
+```
+
+---
+
+## Offline Issues
+
+### "Offline grace period exceeded"
+
+**Cause:** The app has been offline too long.
+
+**Solution:**
+1. Connect to the internet
+2. The license will automatically revalidate
+
+---
+
+### Features not working offline
+
+**Cause:** License data is cached, but some features require online validation.
+
+**Solution:** Design your app to check `IsAuthenticated` rather than making server calls for basic functionality.
+
+---
+
+## Editor Setup
+
+### "Settings not found"
+
+**Cause:** LTLMSettings asset is missing.
+
+**Solution:**
+1. Open **LTLM → Project Settings**
+2. The editor will create the settings automatically
+
+---
+
+### Test Connection fails
+
+**Cause:** Keys are not configured correctly.
+
+**Solution:**
+1. Verify Project ID, Public Key, and Secret Key in settings
+2. Re-fetch keys from the dashboard using the Login feature
+
+---
+
+## Console Error Messages
+
+### "[LTLM] Network Validation Failed"
+
+This is a warning, not an error. The SDK will try to use offline grace.
+
+### "[LTLM] SECURITY ALERT"
+
+License file may have been corrupted or tampered with. Clear cache and reactivate:
+
+```csharp
+LTLMManager.Instance.ClearLicenseCache();
+```
+
+### "[LTLM] CLOCK TAMPERING DETECTED"
+
+System clock was rolled back. Correct the system time and restart the app.
+
+---
+
+## Getting More Help
 
 If issues persist:
 
-1. **Check logs** for `[LTLM]` prefixed messages
-2. **Verify configuration** in Project Settings window
-3. **Test connection** using the Test Connection button
-4. **Contact support** at support@ltlm.io with:
+1. Check the console for `[LTLM]` prefixed messages
+2. Note the exact error message
+3. Contact support@ltlm.io with:
    - Unity version
    - SDK version
-   - Console logs
+   - Error message
    - Steps to reproduce

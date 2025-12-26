@@ -1,157 +1,166 @@
-# Quick Start Guide
+# Quick Start
 
-Get the LTLM Unity SDK running in your project in just 5 minutes.
-
----
-
-## Prerequisites
-
-- Unity 2020.3 LTS or later
-- .NET Standard 2.1 compatible project
-- An LTLM account with a configured project
+Get the LTLM SDK running in your Unity project in 5 minutes.
 
 ---
 
 ## Step 1: Import the SDK
 
-1. Download the latest `LTLM.unitypackage` from the [releases page](#)
-2. In Unity, go to **Assets → Import Package → Custom Package**
-3. Select the downloaded package and click **Import All**
-
-The SDK will be installed to `Assets/LTLM/`.
+1. Download `LTLM.unitypackage` from your dashboard
+2. In Unity: **Assets → Import Package → Custom Package**
+3. Select the package and click **Import All**
 
 ---
 
-## Step 2: Configure Your Project
+## Step 2: Add LTLMManager to Your Scene
 
-### Option A: Using Editor Tools (Recommended)
-
-1. Open **LTLM → Project Settings** from the Unity menu
-2. Log in with your dashboard credentials
-3. Select your project from the dropdown
-4. Click **Inject Selected Project Keys**
-
-![Project Settings Window](images/project-settings.png)
-
-### Option B: Manual Configuration
-
-1. Create a `LTLMSettings` asset: **Create → LTLM → Settings**
-2. Place it in `Assets/LTLM/Resources/LTLMSettings.asset`
-3. Fill in your Project ID, Public Key, and Secret Key
+1. Create an empty GameObject: **GameObject → Create Empty**
+2. Name it `LTLM_Manager`
+3. Add the `LTLMManager` component: **Add Component → LTLM → LTLMManager**
 
 ---
 
-## Step 3: Initialize the SDK
+## Step 3: Configure Your Project Keys
 
-Add the `LTLMBootstrap` script to a GameObject in your first scene:
+### Using Editor Tools (Recommended)
+
+1. Open **LTLM → Project Settings** from the menu bar
+2. Enter your dashboard email and password
+3. Click **Login & Fetch Projects**
+4. Select your project from the dropdown
+5. Click **Inject Selected Project Keys**
+
+### Manual Configuration
+
+Set these values in the LTLMManager Inspector:
+
+| Field | Where to Find |
+|-------|---------------|
+| Project ID | Dashboard → Project → Settings |
+| Public Key | Dashboard → Project → API Keys |
+| Secret Key | Dashboard → Project → API Keys |
+
+---
+
+## Step 4: Activate a License
+
+Add this script to handle license activation:
 
 ```csharp
-// The bootstrap automatically:
-// 1. Creates the LTLMManager singleton
-// 2. Loads settings from Resources
-// 3. Enables DontDestroyOnLoad
-// 4. Starts automatic validation (if enabled)
-```
-
-Or initialize manually:
-
-```csharp
+using UnityEngine;
+using UnityEngine.UI;
 using LTLM.SDK.Unity;
 
-public class GameInitializer : MonoBehaviour
+public class LicenseActivation : MonoBehaviour
 {
+    public InputField licenseKeyInput;
+    public Button activateButton;
+    public Text statusText;
+
     void Start()
     {
-        // SDK is auto-initialized, just activate your license
-        LTLMManager.Instance.ActivateLicense("YOUR-LICENSE-KEY",
-            (license, status) => {
-                Debug.Log($"License activated! Status: {status}");
-                StartGame();
-            },
-            error => {
-                Debug.LogError($"Activation failed: {error}");
-                ShowActivationUI();
-            }
+        activateButton.onClick.AddListener(OnActivateClicked);
+        
+        // Check if already licensed
+        if (LTLMManager.Instance.IsAuthenticated)
+        {
+            statusText.text = "License active!";
+        }
+    }
+
+    void OnActivateClicked()
+    {
+        string key = licenseKeyInput.text.Trim();
+        
+        if (string.IsNullOrEmpty(key))
+        {
+            statusText.text = "Please enter a license key";
+            return;
+        }
+
+        statusText.text = "Activating...";
+        
+        LTLMManager.Instance.ActivateLicense(key,
+            OnActivationSuccess,
+            OnActivationError
         );
+    }
+
+    void OnActivationSuccess(LicenseData license, LicenseStatus status)
+    {
+        if (status == LicenseStatus.Active)
+        {
+            statusText.text = "License activated successfully!";
+            // Proceed to your main menu
+        }
+        else if (status == LicenseStatus.Expired)
+        {
+            statusText.text = "This license has expired. Please renew.";
+        }
+    }
+
+    void OnActivationError(string error)
+    {
+        statusText.text = "Error: " + error;
     }
 }
 ```
 
 ---
 
-## Step 4: Verify Integration
+## Step 5: Check License on App Start
 
-Run your game and check the Console for:
-
-```
-[LTLM] SDK Bootstrapped and ready.
-[LTLM] License validated successfully.
-[LTLM] Starting heartbeat cycle (300s interval)
-```
-
----
-
-## What's Next?
-
-- [License Lifecycle](license-lifecycle.md) - Understand activation and validation
-- [Token System](tokens.md) - Implement usage-based features
-- [Security Best Practices](security/best-practices.md) - Protect your implementation
-
----
-
-## Example: Complete Integration
+For returning users, check their stored license automatically:
 
 ```csharp
 using UnityEngine;
 using LTLM.SDK.Unity;
 
-public class LicenseController : MonoBehaviour
+public class AppStart : MonoBehaviour
 {
-    [SerializeField] private GameObject activationUI;
-    [SerializeField] private GameObject mainMenu;
+    public GameObject activationScreen;
+    public GameObject mainMenu;
 
     void Start()
     {
-        // Check if we have a stored license
+        // Check if user has a valid stored license
         if (LTLMManager.Instance.IsAuthenticated)
         {
-            // Already activated - go to main menu
-            ShowMainMenu();
+            // Already licensed - go to main menu
+            activationScreen.SetActive(false);
+            mainMenu.SetActive(true);
         }
         else
         {
-            // Need activation
-            ShowActivationUI();
+            // No license - show activation
+            activationScreen.SetActive(true);
+            mainMenu.SetActive(false);
         }
-    }
-
-    public void OnActivateClicked(string licenseKey)
-    {
-        LTLMManager.Instance.ActivateLicense(licenseKey,
-            (license, status) => {
-                if (status == LicenseStatus.Active)
-                {
-                    ShowMainMenu();
-                }
-                else if (status == LicenseStatus.Expired)
-                {
-                    ShowRenewalPrompt();
-                }
-            },
-            error => ShowError(error)
-        );
-    }
-
-    private void ShowMainMenu()
-    {
-        activationUI.SetActive(false);
-        mainMenu.SetActive(true);
-    }
-
-    private void ShowActivationUI()
-    {
-        mainMenu.SetActive(false);
-        activationUI.SetActive(true);
     }
 }
 ```
+
+---
+
+## Verify It Works
+
+1. Run your game
+2. Enter a valid license key
+3. You should see "License activated successfully!"
+4. Check console for `[LTLM] License validated successfully`
+
+---
+
+## What's Next?
+
+- [License Activation](license-activation.md) - Complete activation guide
+- [Token Consumption](token-consumption.md) - Usage-based features
+- [Feature Entitlements](entitlements.md) - Lock/unlock features
+- [Demo Scenes](demos/index.md) - Working examples
+
+---
+
+## Need Help?
+
+- Check [Troubleshooting](troubleshooting.md) for common issues
+- Email [support@ltlm.io](mailto:support@ltlm.io)
