@@ -1,0 +1,19 @@
+{
+    "name": "LTLM.Demos",
+    "rootNamespace": "LTLM.SDK.Demos",
+    "references": [
+        "LTLM.Core",
+        "LTLM.Unity"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [
+        "Newtonsoft.Json.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

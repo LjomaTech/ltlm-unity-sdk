@@ -1,0 +1,19 @@
+{
+    "name": "LTLM.Editor",
+    "rootNamespace": "LTLM.SDK.Editor",
+    "references": [
+        "LTLM.Core",
+        "LTLM.Unity"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
