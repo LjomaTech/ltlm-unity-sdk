@@ -6,7 +6,7 @@ namespace LTLM.SDK.Core
         /// The fixed LTLM backend URL. 
         /// This is hardcoded to ensure it points to the correct domain when the SDK is compiled into a DLL.
         /// </summary>
-        public const string BackendUrl = "https://ltlm.ljomatech.com:8000/api";
+        public const string BackendUrl = "https://ltlm.ljomatech.com/api";
         
         /// <summary>
         /// Current SDK Version
