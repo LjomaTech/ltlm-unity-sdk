@@ -1,6 +1,7 @@
 using System;
 using Microsoft.Win32;
 using UnityEngine;
+using LTLM.SDK.Hardware;
 
 namespace LTLM.SDK.Core.Security
 {

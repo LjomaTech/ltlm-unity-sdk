@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using LTLM.SDK.Core.Security;
 using UnityEngine;
 
 namespace LTLM.SDK.Core.Storage

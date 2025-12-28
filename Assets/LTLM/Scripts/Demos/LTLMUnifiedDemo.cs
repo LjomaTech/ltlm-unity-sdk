@@ -3,7 +3,7 @@ using TMPro;
 using UnityEngine.UI;
 using LTLM.SDK.Unity;
 using LTLM.SDK.Core.Models;
-using LTLM.SDK.Unity.Hardware;
+using LTLM.SDK.Hardware;
 using Newtonsoft.Json;
 using System;
 using System.Text;
@@ -83,13 +83,13 @@ namespace LTLM.SDK.Demos
             _manager.ActivateLicense(key, OnSuccess, OnError);
         }
 
-        private void OnSuccess(LicenseData license, LicenseStatus status)
+        private void OnSuccess(LicenseData licenseData, LicenseStatus status)
         {
             statusMessageText.text = status == LicenseStatus.Active 
                 ? "<color=green>License Valid & Active</color>" 
                 : $"<color=orange>Status: {status}</color>";
             
-            UpdateUI(license, status);
+            UpdateUI(licenseData, status);
         }
 
         private void OnError(string message)

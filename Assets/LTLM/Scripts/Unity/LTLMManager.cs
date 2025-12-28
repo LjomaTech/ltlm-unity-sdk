@@ -5,9 +5,9 @@ using UnityEngine;
 using LTLM.SDK.Core;
 using LTLM.SDK.Core.Communication;
 using LTLM.SDK.Core.Models;
-using LTLM.SDK.Core.Storage;
 using LTLM.SDK.Core.Security;
-using LTLM.SDK.Unity.Hardware;
+using LTLM.SDK.Core.Storage;
+using LTLM.SDK.Hardware;
 using Newtonsoft.Json;
 
 namespace LTLM.SDK.Unity
@@ -301,7 +301,7 @@ namespace LTLM.SDK.Unity
                 },
                 err => {
                     _isValidating = false;
-                    Debug.LogWarning("[LTLM] Network Validation Failed. Checking offline grace...");
+                    Debug.LogWarning("[LTLM] Network Validation Failed. Checking offline grace..." + err);
                     if (CheckOfflineGraceTimeout())
                     {
                         var status = GetLicenseStatus();

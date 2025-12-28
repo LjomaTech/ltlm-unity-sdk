@@ -8,7 +8,7 @@ using UnityEngine.Networking;
 using LTLM.SDK.Core.Models;
 using LTLM.SDK.Core.Security;
 using LTLM.SDK.Core.Storage;
-using LTLM.SDK.Unity.Hardware;
+using LTLM.SDK.Hardware;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 

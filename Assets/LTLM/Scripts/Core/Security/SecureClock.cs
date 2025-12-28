@@ -1,6 +1,6 @@
 using System;
 using LTLM.SDK.Core.Storage;
-using LTLM.SDK.Unity.Hardware;
+using LTLM.SDK.Hardware;
 using UnityEngine;
 
 namespace LTLM.SDK.Core.Security
