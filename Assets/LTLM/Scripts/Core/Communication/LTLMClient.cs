@@ -8,7 +8,7 @@ using UnityEngine.Networking;
 using LTLM.SDK.Core.Models;
 using LTLM.SDK.Core.Security;
 using LTLM.SDK.Core.Storage;
-using LTLM.SDK.Hardware;
+using LTLM.SDK.Core.Hardware;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -37,6 +37,37 @@ namespace LTLM.SDK.Core.Communication
         }
 
         public CryptoProvider GetCrypto() => _crypto;
+
+        /// <summary>
+        /// Sends an authenticated GET request.
+        /// </summary>
+        public IEnumerator GetRequest<TResponse>(string endpoint, Action<TResponse> onSuccess, Action<string> onError)
+        {
+            using (UnityWebRequest request = UnityWebRequest.Get(_baseUrl + endpoint))
+            {
+                request.SetRequestHeader("x-project-secret", secretKey);
+
+                yield return request.SendWebRequest();
+
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    string errorText = request.downloadHandler?.text ?? request.error;
+                    onError?.Invoke(errorText);
+                }
+                else
+                {
+                    try
+                    {
+                        var response = JsonConvert.DeserializeObject<TResponse>(request.downloadHandler.text);
+                        onSuccess?.Invoke(response);
+                    }
+                    catch (Exception ex)
+                    {
+                        onError?.Invoke("Failed to parse response: " + ex.Message);
+                    }
+                }
+            }
+        }
 
         /// <summary>
         /// Recursively sorts JObject properties alphabetically to match Node.js fast-json-stable-stringify.
@@ -85,14 +116,22 @@ namespace LTLM.SDK.Core.Communication
             return json.Replace("\\/", "/");
         }
 
+        /// <summary>
+        /// Sends an encrypted POST request using the Triple-Wrap protocol.
+        /// </summary>
+        /// <param name="skipNonce">If true, uses current nonce without updating. 
+        /// Use for fire-and-forget calls like isClosing heartbeats to prevent nonce desync.</param>
         public IEnumerator PostEncrypted<TRequest, TResponse>(string endpoint, TRequest data,
-            Action<TResponse> onSuccess, Action<string> onError)
+            Action<TResponse> onSuccess, Action<string> onError, bool skipNonce = false)
         {
             // 1. Prepare Inner Body (Pro Request Envelope)
+            // For skipNonce calls (like isClosing), use current nonce without generating new one
+            string nonceToUse = skipNonce ? (_lastNonce ?? "skip") : (_lastNonce ?? Guid.NewGuid().ToString());
+            
             var innerBody = new Dictionary<string, object>
             {
                 { "data", data },
-                { "nonce", _lastNonce ?? Guid.NewGuid().ToString() },
+                { "nonce", nonceToUse },
                 { "hwid", DeviceID.GetHWID() }
             };
 
@@ -175,7 +214,8 @@ namespace LTLM.SDK.Core.Communication
                         var signedResponse = JsonConvert.DeserializeObject<SignedResponse<TResponse>>(decryptedBody);
 
                         // Update Nonce (server sends server_nonce)
-                        if (!string.IsNullOrEmpty(signedResponse.server_nonce))
+                        // Skip nonce update for fire-and-forget calls to prevent desync
+                        if (!skipNonce && !string.IsNullOrEmpty(signedResponse.server_nonce))
                         {
                             _lastNonce = signedResponse.server_nonce;
                             SecureStorage.Save("nonce_" + _projectId, _lastNonce, DeviceID.GetHWID());

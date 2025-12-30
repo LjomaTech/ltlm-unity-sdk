@@ -11,6 +11,8 @@ public enum LicenseStatus
 {
     Unauthenticated,
     Active,
+    ValidNoSeat,       // All seats are occupied
+    Kicked,            // Seat released by another device
     Expired,
     GracePeriod,
     ConnectionRequired,
@@ -48,6 +50,68 @@ if (status == LicenseStatus.Active)
     ShowMainApp();
 }
 ```
+
+---
+
+### ValidNoSeat
+
+License is valid but all concurrent seats are occupied by other devices.
+
+```csharp
+if (status == LicenseStatus.ValidNoSeat)
+{
+    ShowSeatManagementUI();
+    // Allow user to release another device's seat
+}
+```
+
+**When this happens:**
+- License is valid and not expired
+- Device is registered (HWID limit OK)
+- BUT all concurrent seat slots are occupied
+
+**Response includes:**
+```csharp
+license.seatStatus        // "NO_SEAT"
+license.activeSeats       // e.g., 2
+license.maxConcurrentSeats // e.g., 2
+license.canReleaseSeat    // true if allowed to kick others
+```
+
+**Recommended action:**
+- Show "Waiting for seat" UI
+- Load active seats with `GetActiveSeats()`
+- Let user release another device with `ReleaseSeat()`
+
+---
+
+### Kicked
+
+Your seat was released by another device. You must reactivate.
+
+```csharp
+if (status == LicenseStatus.Kicked)
+{
+    ShowMessage("Your session was ended by another device.");
+    ShowReactivateButton();
+}
+```
+
+**When this happens:**
+- Another user called `ReleaseSeat()` targeting this device
+- The `OnKicked` event is also fired with details
+
+**Response includes:**
+```csharp
+license.kickedNotice.kickedBy         // HWID of kicker
+license.kickedNotice.kickedByNickname // Nickname of kicker
+license.kickedNotice.timestamp
+```
+
+**Recommended action:**
+- Stop heartbeat (SDK does this automatically)
+- Show message with who kicked
+- Offer "Try Again" button to reactivate
 
 ---
 
@@ -99,7 +163,7 @@ if (status == LicenseStatus.GracePeriod)
 
 ### ConnectionRequired
 
-Device is offline and has exceeded the offline grace period.
+Device is offline and has exceeded the offline grace period OR offline is disabled.
 
 ```csharp
 if (status == LicenseStatus.ConnectionRequired)
@@ -110,8 +174,9 @@ if (status == LicenseStatus.ConnectionRequired)
 ```
 
 **When this happens:**
-- Network validation failed
-- Offline time exceeded configured limit
+- Network validation failed AND:
+  - `offlineEnabled` is `false`, OR
+  - Offline time exceeded `offlineGraceHours`
 
 **Recommended action:**
 - Show connection required message
@@ -205,14 +270,15 @@ public class StatusHandler : MonoBehaviour
     public GameObject graceWarning;
     public GameObject offlineError;
     public GameObject suspendedMessage;
+    public GameObject seatManagementUI;
     public Text graceWarningText;
 
     void Start()
     {
-        LTLMManager.OnValidationCompleted += HandleStatus;
+        LTLMManager.OnLicenseStatusChanged += HandleStatus;
     }
 
-    void HandleStatus(bool success, LicenseStatus status)
+    void HandleStatus(LicenseStatus status)
     {
         // Hide all first
         HideAll();
@@ -221,6 +287,11 @@ public class StatusHandler : MonoBehaviour
         {
             case LicenseStatus.Active:
                 mainApp.SetActive(true);
+                break;
+
+            case LicenseStatus.ValidNoSeat:
+            case LicenseStatus.Kicked:
+                seatManagementUI.SetActive(true);
                 break;
 
             case LicenseStatus.Expired:
@@ -262,6 +333,7 @@ public class StatusHandler : MonoBehaviour
         graceWarning.SetActive(false);
         offlineError.SetActive(false);
         suspendedMessage.SetActive(false);
+        seatManagementUI.SetActive(false);
     }
 
     void UpdateGraceWarning()
@@ -277,7 +349,7 @@ public class StatusHandler : MonoBehaviour
 
     void OnDestroy()
     {
-        LTLMManager.OnValidationCompleted -= HandleStatus;
+        LTLMManager.OnLicenseStatusChanged -= HandleStatus;
     }
 }
 ```
@@ -291,7 +363,11 @@ The SDK automatically converts the server's string status to the enum:
 | Server String | Enum Value |
 |---------------|------------|
 | `"active"` | `LicenseStatus.Active` |
+| `"VALID_NO_SEAT"` | `LicenseStatus.ValidNoSeat` |
+| `"kicked"` or `"KICKED"` | `LicenseStatus.Kicked` |
 | `"expired"` | `LicenseStatus.Expired` |
+| `"grace_period"` | `LicenseStatus.GracePeriod` |
+| `"connection_required"` | `LicenseStatus.ConnectionRequired` |
 | `"suspended"` | `LicenseStatus.Suspended` |
 | `"revoked"` | `LicenseStatus.Revoked` |
 

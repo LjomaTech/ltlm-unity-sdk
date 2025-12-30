@@ -2,7 +2,7 @@
 
 Solutions to common issues.
 
----
+> **Note:** On startup, the SDK always calls the activation endpoint to resync the nonce chain. This prevents issues from power outages or crashes.
 
 ## Activation Issues
 

@@ -18,11 +18,18 @@ namespace LTLM.SDK.Editor
         private string _devEmail;
         private string _devPassword;
         private string _status = "Ready";
+        private List<LTLM.SDK.Core.Models.DevOrgData> _availableOrgs;
         private List<LTLM.SDK.Core.Models.DevProjectData> _availableProjects;
         private string[] _projectNames;
         private int _selectedProjectIndex = 0;
         private bool _isAuthenticating = false;
         private bool _isTestingConnection = false;
+
+        // MFA State
+        private bool _mfaRequired = false;
+        private string _mfaToken;
+        private string _mfaOtp;
+        private int _mfaUserId;
 
         // UI State
         private bool _showAdvanced = false;
@@ -194,19 +201,49 @@ namespace LTLM.SDK.Editor
             
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             
-            EditorGUILayout.HelpBox("Log in with your LTLM dashboard credentials to automatically fetch and inject project keys.", MessageType.None);
-            
-            _devEmail = EditorGUILayout.TextField("Email / Username", _devEmail);
-            _devPassword = EditorGUILayout.PasswordField("Password", _devPassword);
-
-            EditorGUI.BeginDisabledGroup(_isAuthenticating || string.IsNullOrEmpty(_devEmail) || string.IsNullOrEmpty(_devPassword));
-            
-            if (GUILayout.Button(_isAuthenticating ? "Logging in..." : "Login & Fetch Projects", GUILayout.Height(28)))
+            if (_mfaRequired)
             {
-                PerformDevLogin(settings);
+                // MFA OTP Input
+                EditorGUILayout.HelpBox("Enter the verification code from your authenticator app.", MessageType.Info);
+                
+                _mfaOtp = EditorGUILayout.TextField("Verification Code", _mfaOtp);
+                
+                EditorGUILayout.BeginHorizontal();
+                
+                EditorGUI.BeginDisabledGroup(_isAuthenticating || string.IsNullOrEmpty(_mfaOtp));
+                if (GUILayout.Button(_isAuthenticating ? "Verifying..." : "Verify & Login", GUILayout.Height(28)))
+                {
+                    PerformMfaVerify(settings);
+                }
+                EditorGUI.EndDisabledGroup();
+                
+                if (GUILayout.Button("Cancel", GUILayout.Width(80), GUILayout.Height(28)))
+                {
+                    _mfaRequired = false;
+                    _mfaToken = null;
+                    _mfaOtp = "";
+                    _status = "MFA cancelled. Please try again.";
+                }
+                
+                EditorGUILayout.EndHorizontal();
             }
-            
-            EditorGUI.EndDisabledGroup();
+            else
+            {
+                // Normal Login
+                EditorGUILayout.HelpBox("Log in with your LTLM dashboard credentials to automatically fetch and inject project keys.", MessageType.None);
+                
+                _devEmail = EditorGUILayout.TextField("Email / Username", _devEmail);
+                _devPassword = EditorGUILayout.PasswordField("Password", _devPassword);
+
+                EditorGUI.BeginDisabledGroup(_isAuthenticating || string.IsNullOrEmpty(_devEmail) || string.IsNullOrEmpty(_devPassword));
+                
+                if (GUILayout.Button(_isAuthenticating ? "Logging in..." : "Login & Fetch Projects", GUILayout.Height(28)))
+                {
+                    PerformDevLogin(settings);
+                }
+                
+                EditorGUI.EndDisabledGroup();
+            }
             
             EditorGUILayout.EndVertical();
         }
@@ -221,8 +258,9 @@ namespace LTLM.SDK.Editor
             
             var selectedProject = _availableProjects[_selectedProjectIndex];
             
-            // Project info
-            EditorGUILayout.LabelField("Type: " + selectedProject.status, EditorStyles.miniLabel);
+            // Project info with organization
+            EditorGUILayout.LabelField("Organization: " + (selectedProject.orgName ?? "Unknown"), EditorStyles.miniLabel);
+            EditorGUILayout.LabelField("Status: " + selectedProject.status, EditorStyles.miniLabel);
             EditorGUILayout.LabelField("Public: " + (selectedProject.isPublic ? "Yes" : "No"), EditorStyles.miniLabel);
             
             EditorGUILayout.Space(5);
@@ -442,14 +480,41 @@ namespace LTLM.SDK.Editor
                         try
                         {
                             var response = JsonUtility.FromJson<LTLM.SDK.Core.Models.DevLoginResponse>(webRequest.downloadHandler.text);
-                            _availableProjects = response.projects;
+                            
+                            // Check for MFA requirement
+                            if (response.mfaRequired)
+                            {
+                                _mfaRequired = true;
+                                _mfaToken = response.mfaToken;
+                                _mfaUserId = response.userId;
+                                _mfaOtp = "";
+                                _status = "MFA required. Enter your authenticator code.";
+                                EditorApplication.update -= checkProgress;
+                                Repaint();
+                                webRequest.Dispose();
+                                return;
+                            }
+                            
+                            _availableOrgs = response.organizations ?? new List<LTLM.SDK.Core.Models.DevOrgData>();
+                            _availableProjects = response.projects ?? new List<LTLM.SDK.Core.Models.DevProjectData>();
                             _projectNames = new string[_availableProjects.Count];
+                            
+                            // Format project names with organization
                             for (int i = 0; i < _availableProjects.Count; i++)
                             {
-                                _projectNames[i] = $"{_availableProjects[i].name} (ID: {_availableProjects[i].id})";
+                                var p = _availableProjects[i];
+                                string orgName = !string.IsNullOrEmpty(p.orgName) ? p.orgName : "Unknown Org";
+                                _projectNames[i] = $"[{orgName}] {p.name}";
                             }
+                            
                             _selectedProjectIndex = 0;
-                            _status = $"✓ Logged in! Found {_availableProjects.Count} project(s).";
+                            
+                            // Status message with org count
+                            int orgCount = _availableOrgs.Count;
+                            string orgText = orgCount > 1 ? $"{orgCount} organizations" : (orgCount == 1 ? "1 organization" : "");
+                            string projectText = _availableProjects.Count == 1 ? "1 project" : $"{_availableProjects.Count} projects";
+                            
+                            _status = $"✓ Logged in! Found {projectText}" + (orgCount > 0 ? $" across {orgText}" : "") + ".";
                         }
                         catch (System.Exception ex)
                         {
@@ -477,6 +542,110 @@ namespace LTLM.SDK.Editor
                         }
                     }
                     
+                    EditorApplication.update -= checkProgress;
+                    Repaint();
+                    webRequest.Dispose();
+                }
+            };
+
+            EditorApplication.update += checkProgress;
+        }
+
+        private void PerformMfaVerify(LTLM.SDK.Core.LTLMSettings settings)
+        {
+            _isAuthenticating = true;
+            _status = "Verifying OTP...";
+
+            // Backend expects mfaToken from initial login response
+            string json = $"{{\"mfaToken\":\"{_mfaToken}\",\"otp\":\"{_mfaOtp}\"}}";
+            string url = LTLM.SDK.Core.LTLMConstants.BackendUrl.TrimEnd('/') + "/v1/sdk/pro/auth/dev-login/verify-otp";
+
+            var webRequest = new UnityWebRequest(url, "POST");
+            byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(json);
+            webRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            webRequest.downloadHandler = new DownloadHandlerBuffer();
+            webRequest.SetRequestHeader("Content-Type", "application/json");
+
+            var operation = webRequest.SendWebRequest();
+
+            EditorApplication.CallbackFunction checkProgress = null;
+            checkProgress = () =>
+            {
+                if (operation.isDone)
+                {
+                    _isAuthenticating = false;
+                    if (webRequest.result == UnityWebRequest.Result.Success)
+                    {
+                        try
+                        {
+                            var response = JsonUtility.FromJson<LTLM.SDK.Core.Models.DevLoginResponse>(webRequest.downloadHandler.text);
+
+                            // Clear MFA state
+                            _mfaRequired = false;
+                            _mfaToken = null;
+                            _mfaOtp = "";
+
+                            // Process login response
+                            _availableOrgs = response.organizations ?? new List<LTLM.SDK.Core.Models.DevOrgData>();
+                            _availableProjects = response.projects ?? new List<LTLM.SDK.Core.Models.DevProjectData>();
+                            _projectNames = new string[_availableProjects.Count];
+
+                            for (int i = 0; i < _availableProjects.Count; i++)
+                            {
+                                var p = _availableProjects[i];
+                                string orgName = !string.IsNullOrEmpty(p.orgName) ? p.orgName : "Unknown Org";
+                                _projectNames[i] = $"[{orgName}] {p.name}";
+                            }
+
+                            _selectedProjectIndex = 0;
+
+                            int orgCount = _availableOrgs.Count;
+                            string orgText = orgCount > 1 ? $"{orgCount} organizations" : (orgCount == 1 ? "1 organization" : "");
+                            string projectText = _availableProjects.Count == 1 ? "1 project" : $"{_availableProjects.Count} projects";
+
+                            _status = $"✓ MFA verified! Found {projectText}" + (orgCount > 0 ? $" across {orgText}" : "") + ".";
+                        }
+                        catch (System.Exception ex)
+                        {
+                            _status = "Parse error: " + ex.Message;
+                        }
+                    }
+                    else
+                    {
+                        string errorText = webRequest.downloadHandler.text;
+                        long responseCode = webRequest.responseCode;
+                        Debug.LogError($"[LTLM] MFA Verify failed: HTTP {responseCode}, Error: {webRequest.error}, Body: {errorText}");
+                        
+                        try
+                        {
+                            var errorDetails = JsonUtility.FromJson<LTLM.SDK.Core.Models.LTLMError>(errorText);
+                            if (errorDetails != null && !string.IsNullOrEmpty(errorDetails.message))
+                            {
+                                _status = $"✗ {errorDetails.message}";
+                            }
+                            else if (responseCode == 401)
+                            {
+                                _status = "✗ MFA session expired. Please login again.";
+                            }
+                            else if (responseCode == 400)
+                            {
+                                _status = "✗ Invalid verification code.";
+                            }
+                            else if (responseCode == 404)
+                            {
+                                _status = "✗ Endpoint not found. Please check your backend URL.";
+                            }
+                            else
+                            {
+                                _status = $"✗ Error ({responseCode}): {webRequest.error}";
+                            }
+                        }
+                        catch
+                        {
+                            _status = $"✗ Error ({responseCode}): " + (string.IsNullOrEmpty(errorText) ? webRequest.error : errorText);
+                        }
+                    }
+
                     EditorApplication.update -= checkProgress;
                     Repaint();
                     webRequest.Dispose();

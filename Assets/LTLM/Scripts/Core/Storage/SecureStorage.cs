@@ -132,6 +132,15 @@ namespace LTLM.SDK.Core.Storage
             if (File.Exists(path)) File.Delete(path);
         }
 
+        /// <summary>
+        /// Deletes a stored file. The machineKey parameter is accepted for API consistency
+        /// with Save/Load but is not used for deletion (files are not encrypted differently per machine).
+        /// </summary>
+        public static void Delete(string fileName, string machineKey)
+        {
+            Delete(fileName);
+        }
+
         public static bool Exists(string fileName)
         {
             return File.Exists(Path.Combine(StoragePath, fileName));

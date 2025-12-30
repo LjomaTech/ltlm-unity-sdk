@@ -12,16 +12,16 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ca8623b2319a1e3468875d2490f357d0, type: 3}
   m_Name: LTLMSettings
   m_EditorClassIdentifier: 
-  projectId: 1
-  projectName: Demo Game
+  projectId: 3
+  projectName: Spin the wheel
   publicKey: '-----BEGIN PUBLIC KEY-----
 
-    MCowBQYDK2VwAyEAt79Xiey2eQwhE+yOTr/YZZWUq9iN6ik9Lr722ixXM3w=
+    MCowBQYDK2VwAyEAm0X0c/gIbsM0++3iReand0ay09c68EfWU5RPdM0K6x4=
 
     -----END
     PUBLIC KEY-----
 
 '
-  secretKey: 08eb1a24813aa8cf8a74fc06759b01138ca307d4f48b9f642f3013c3e37dd64c
+  secretKey: 97c12d5191d93d6dabe78d61062f3033eae72a6d28a1de1fe1f0fa5b7917ae94
   capabilities: []
   analyticsEvents: []

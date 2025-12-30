@@ -36,7 +36,7 @@ namespace LTLM.SDK.Core.Models
         public int LicenseID;
         public int ProjectID;
         public string licenseKey;
-        public string status; // active, suspended, expired, revoked, grace_period
+        public string status; // active, VALID_NO_SEAT, suspended, expired, revoked, grace_period
         public string environment; // production, staging, development
         
         public string validUntil;
@@ -50,6 +50,18 @@ namespace LTLM.SDK.Core.Models
         public int? maxConcurrentSeats; // Max simultaneous users
         public int? activeSeats; // Current simultaneous users
         
+        // Seat management fields
+        public string seatStatus; // OCCUPIED, NO_SEAT, RELEASED, N/A
+        public bool? canReleaseSeat; // Whether user can release other seats
+        public KickedNotice kickedNotice; // Present if this device was kicked
+        
+        // Enforcement settings (from server)
+        public bool? seatsEnabled;      // Whether concurrent seats are enabled for this license
+        public bool? tokensEnabled;     // Whether token consumption is enabled
+        public bool? offlineEnabled;    // Whether offline mode is enabled
+        public int? heartbeatIntervalSeconds; // Server-specified heartbeat interval
+        public int? offlineGraceHours;   // Hours allowed offline before requiring revalidation
+        
         public string subscriptionStatus;
         public string detectedCountry;
 
@@ -57,17 +69,59 @@ namespace LTLM.SDK.Core.Models
         public PolicyData policy;
         public CustomerData customer;
         
-        public Dictionary<string, object> features;     // Resolved features
-        public Dictionary<string, object> metadata;     // Resolved metadata (from overrides)
-        public Dictionary<string, object> rawMetadata;  // Original license metadata
-        public Dictionary<string, object> config;       // Full resolved config
+        // Resolved config (access config["features"], config["metadata"] for custom data)
+        public Dictionary<string, object> config;
+    }
+
+    [Serializable]
+    public class KickedNotice
+    {
+        public string kickedBy; // HWID of device that kicked this one
+        public string kickedByNickname;
+        public string timestamp;
+        public string reason;
+    }
+
+    [Serializable]
+    public class SeatInfo
+    {
+        public string hwid;
+        public string nickname;
+        public string lastSeen;
+        public bool isCurrentDevice;
+    }
+
+    [Serializable]
+    public class GetSeatsResponse
+    {
+        public List<SeatInfo> seats;
+        public int activeSeats;
+        public int maxSeats;
+        public bool canReleaseSeat;
+    }
+
+    [Serializable]
+    public class ReleaseSeatRequest
+    {
+        public string targetHwid;
+        public string callerHwid;
+        public bool claimSeat;
+    }
+
+    [Serializable]
+    public class ReleaseSeatResponse
+    {
+        public bool success;
+        public string message;
+        public string releasedHwid;
+        public bool seatClaimed;
+        public int activeSeats;
     }
 
     [Serializable]
     public class PolicyData
     {
         public int PolicyID;
-        public int ProjectID;
         public string name;
         public string type; // perpetual, subscription, trial, fixed_duration, usage-based
         public string description;
@@ -81,9 +135,8 @@ namespace LTLM.SDK.Core.Models
 
         public bool isAirGapped;
         public string environment;
-        public int sortOrder;
-
-        public PolicyConfig config;
+        
+        public PolicyConfig config; // Policy config for limits display
     }
 
     [Serializable]
@@ -196,6 +249,10 @@ namespace LTLM.SDK.Core.Models
         public List<string> capabilities;
         public AnalyticsConfig analytics;
         public Dictionary<string, object> settings;
+        
+        // Organization info
+        public int orgId;
+        public string orgName;
     }
 
     [Serializable]
@@ -213,17 +270,41 @@ namespace LTLM.SDK.Core.Models
     }
 
     [Serializable]
+    public class DevOrgData
+    {
+        public int id;
+        public string name;
+        public string role;   // Owner, Admin, Member
+        public string status; // active, suspended, etc.
+    }
+
+    [Serializable]
+    public class DevUserData
+    {
+        public int userId;
+        public string username;
+        public string fullName;
+    }
+
+    [Serializable]
     public class DevLoginRequest
     {
         public string username;
         public string password;
+        public string mfaToken; // For MFA if required
     }
 
     [Serializable]
     public class DevLoginResponse
     {
+        public DevUserData user;
+        public List<DevOrgData> organizations;
         public List<DevProjectData> projects;
         public string accessToken;
+        public bool mfaRequired;
+        public string mfaMethod;
+        public string mfaToken; // Token for MFA verification
+        public int userId; // For MFA flow
     }
 
     [Serializable]

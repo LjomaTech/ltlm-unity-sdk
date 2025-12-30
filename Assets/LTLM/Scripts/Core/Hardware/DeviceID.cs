@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using UnityEngine;
 
-namespace LTLM.SDK.Hardware
+namespace LTLM.SDK.Core.Hardware
 {
     /// <summary>
     /// Generates a robust, stable HWID for the machine.

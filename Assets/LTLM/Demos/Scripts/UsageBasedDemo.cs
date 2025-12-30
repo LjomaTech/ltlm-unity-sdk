@@ -3,7 +3,6 @@ using UnityEngine.UI;
 using LTLM.SDK.Unity;
 using System.Collections.Generic;
 using LTLM.SDK.Core.Models;
-using TMPro;
 
 namespace LTLM.SDK.Demos
 {
@@ -20,8 +19,8 @@ namespace LTLM.SDK.Demos
     public class UsageBasedDemo : MonoBehaviour
     {
         [Header("UI Elements")]
-        public TMP_Text statusText;
-        public TMP_Text tokenBalanceText;
+        public Text statusText;
+        public Text tokenBalanceText;
         public Button exportLowButton;
         public Button exportHighButton;
         public Button export4KButton;
@@ -103,11 +102,15 @@ namespace LTLM.SDK.Demos
                 }
             }
 
-            // Example: Check for custom metadata
-            if (license.metadata != null && license.metadata.ContainsKey("welcomeMessage"))
+            // Example: Check for custom metadata (now inside config)
+            if (license.config.ContainsKey("metadata"))
             {
-                string welcome = license.metadata["welcomeMessage"].ToString();
-                Debug.Log("[Demo] Welcome message: " + welcome);
+                var metadata = license.config["metadata"] as Dictionary<string, object>;
+                if (metadata != null && metadata.ContainsKey("welcomeMessage"))
+                {
+                    string welcome = metadata["welcomeMessage"].ToString();
+                    Debug.Log("[Demo] Welcome message: " + welcome);
+                }
             }
         }
 
@@ -152,18 +155,17 @@ namespace LTLM.SDK.Demos
         private void UpdateButtonLabels()
         {
             if (exportLowButton != null)
-                exportLowButton.GetComponentInChildren<TMP_Text>().text = $"Low Res ({lowResCost})";
+                exportLowButton.GetComponentInChildren<Text>().text = $"Low Res ({lowResCost})";
             if (exportHighButton != null)
-                exportHighButton.GetComponentInChildren<TMP_Text>().text = $"High Res ({highResCost})";
+                exportHighButton.GetComponentInChildren<Text>().text = $"High Res ({highResCost})";
             if (export4KButton != null)
-                export4KButton.GetComponentInChildren<TMP_Text>().text = $"4K ({cost4K})";
+                export4KButton.GetComponentInChildren<Text>().text = $"4K ({cost4K})";
         }
 
         private void UpdateButtonStates(LicenseData license)
         {
             int balance = license?.tokensRemaining ?? 0;
 
-            UpdateTokenDisplay(license);
             if (exportLowButton != null)
                 exportLowButton.interactable = balance >= lowResCost;
             if (exportHighButton != null)
@@ -223,7 +225,7 @@ namespace LTLM.SDK.Demos
 
             // You can create a top-up session with a specific pack
             LTLMManager.Instance.CreateTopUpSession(
-                "topup-1766789091466",
+                "credits_100",
                 "https://yourapp.com/topup-success",
                 url => {
                     statusText.text = "Opening checkout...";

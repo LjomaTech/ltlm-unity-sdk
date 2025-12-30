@@ -5,9 +5,9 @@ using UnityEngine;
 using LTLM.SDK.Core;
 using LTLM.SDK.Core.Communication;
 using LTLM.SDK.Core.Models;
-using LTLM.SDK.Core.Security;
 using LTLM.SDK.Core.Storage;
-using LTLM.SDK.Hardware;
+using LTLM.SDK.Core.Security;
+using LTLM.SDK.Core.Hardware;
 using Newtonsoft.Json;
 
 namespace LTLM.SDK.Unity
@@ -22,6 +22,8 @@ namespace LTLM.SDK.Unity
         Unauthenticated,
         /// <summary>License is valid and active.</summary>
         Active,
+        /// <summary>License is valid but all concurrent seats are occupied.</summary>
+        ValidNoSeat,
         /// <summary>License has passed its expiration date.</summary>
         Expired,
         /// <summary>License is expired but within the configured grace period.</summary>
@@ -35,7 +37,9 @@ namespace LTLM.SDK.Unity
         /// <summary>License has been revoked and cannot be used.</summary>
         Revoked,
         /// <summary>License has been terminated; application will exit.</summary>
-        Terminated
+        Terminated,
+        /// <summary>Session was kicked by another device. Must reactivate to continue.</summary>
+        Kicked
     }
 
     /// <summary>
@@ -152,6 +156,38 @@ namespace LTLM.SDK.Unity
         /// </summary>
         public static event Action<LicenseData> OnTokensConsumed;
 
+        /// <summary>
+        /// Fired when seat status changes (OCCUPIED, NO_SEAT, RELEASED).
+        /// Parameters: (string seatStatus, int activeSeats, int maxSeats)
+        /// </summary>
+        public static event Action<string, int, int> OnSeatStatusChanged;
+
+        /// <summary>
+        /// Fired when this device is kicked by another device claiming its seat.
+        /// Parameter: (KickedNotice notice)
+        /// </summary>
+        public static event Action<KickedNotice> OnKicked;
+
+        /// <summary>
+        /// Returns true if license is valid but waiting for a seat.
+        /// </summary>
+        public bool IsWaitingForSeat => _activeLicense != null && _activeLicense.status == "VALID_NO_SEAT";
+
+        /// <summary>
+        /// Returns true if concurrent seats are enabled for the current license.
+        /// </summary>
+        public bool IsSeatsEnabled => _activeLicense != null && (_activeLicense.seatsEnabled ?? false);
+
+        /// <summary>
+        /// Returns true if token consumption is enabled for the current license.
+        /// </summary>
+        public bool IsTokensEnabled => _activeLicense != null && (_activeLicense.tokensEnabled ?? false);
+
+        /// <summary>
+        /// Returns true if offline mode (grace period) is allowed for the current license.
+        /// </summary>
+        public bool IsOfflineEnabled => _activeLicense != null && (_activeLicense.offlineEnabled ?? true);
+
         private void Awake()
         {
             if (Instance != null)
@@ -189,6 +225,11 @@ namespace LTLM.SDK.Unity
             }
         }
 
+        /// <summary>
+        /// Attempts to load and validate a previously stored license.
+        /// Uses ValidateLicense to check status without re-registering the HWID.
+        /// If nonce desync occurs (from crash/power outage), auto-recovery will handle it.
+        /// </summary>
         public void TryLoadStoredLicense(Action<LicenseData, LicenseStatus> onSuccess = null, Action<string> onError = null)
         {
             if (_isValidating) return;
@@ -196,6 +237,9 @@ namespace LTLM.SDK.Unity
             string storedKey = SecureStorage.Load("license_key_" + projectId, DeviceID.GetHWID());
             if (!string.IsNullOrEmpty(storedKey))
             {
+                // Use ValidateLicense to check status without re-registering HWID.
+                // This respects admin actions like HWID removal from portal.
+                // Auto-recovery handles nonce desync from crashes.
                 ValidateLicense(storedKey, onSuccess, onError);
             }
             else
@@ -241,6 +285,7 @@ namespace LTLM.SDK.Unity
                     SecureStorage.Save("license_key_" + projectId, licenseKey, DeviceID.GetHWID());
                     SecureStorage.Save("last_successful_sync_" + projectId, SecureClock.GetEffectiveTime(projectId).Ticks.ToString(), DeviceID.GetHWID());
                     ProcessEnforcement(license);
+                    ProcessSeatStatus(license);
                     if (_activeLicense == null) {
                         onError?.Invoke("This device is not authorized for this license.");
                         return;
@@ -291,6 +336,7 @@ namespace LTLM.SDK.Unity
                     CacheLicense(license);
                     SecureStorage.Save("last_successful_sync_" + projectId, SecureClock.GetEffectiveTime(projectId).Ticks.ToString(), DeviceID.GetHWID());
                     ProcessEnforcement(license);
+                    ProcessSeatStatus(license);
                     if (_activeLicense == null) {
                         onError?.Invoke("This device is not authorized for this license.");
                         return;
@@ -301,7 +347,7 @@ namespace LTLM.SDK.Unity
                 },
                 err => {
                     _isValidating = false;
-                    Debug.LogWarning("[LTLM] Network Validation Failed. Checking offline grace..." + err);
+                    Debug.LogWarning("[LTLM] Network Validation Failed. Checking offline grace...");
                     if (CheckOfflineGraceTimeout())
                     {
                         var status = GetLicenseStatus();
@@ -387,7 +433,6 @@ namespace LTLM.SDK.Unity
         {
             while (true)
             {
-                yield return new WaitForSeconds(heartbeatIntervalSeconds);
                 if (_activeLicense == null) break;
 
                 var request = new HeartbeatRequest
@@ -405,6 +450,7 @@ namespace LTLM.SDK.Unity
                         CacheLicense(license);
                         SecureStorage.Save("last_successful_sync_" + projectId, SecureClock.GetEffectiveTime(projectId).Ticks.ToString(), DeviceID.GetHWID());
                         ProcessEnforcement(license);
+                        ProcessSeatStatus(license);
                         SyncPendingConsumptions();
                     },
                     err => {
@@ -422,6 +468,7 @@ namespace LTLM.SDK.Unity
                         }
                     }
                 );
+                yield return new WaitForSeconds(heartbeatIntervalSeconds);
             }
         }
 
@@ -449,12 +496,6 @@ namespace LTLM.SDK.Unity
                 {
                     StartHeartbeat();
                     Debug.Log("[LTLM] Heartbeat resumed (app foregrounded).");
-                    
-                    // Trigger immediate validation to refresh license state
-                    if (!string.IsNullOrEmpty(_activeLicense.licenseKey))
-                    {
-                        ValidateLicense(_activeLicense.licenseKey);
-                    }
                 }
             }
         }
@@ -491,14 +532,26 @@ namespace LTLM.SDK.Unity
         /// Explicitly releases the concurrent seat for this machine.
         /// Use this for 'Sign Out' functionality or when switching users.
         /// 
+        /// <para><b>Note:</b> This method requires network connectivity.
+        /// Signout is blocked when offline to prevent license abuse.</para>
+        /// 
         /// <para><b>Example:</b></para>
         /// <code>
         /// LTLMManager.Instance.DeactivateSeat();
         /// </code>
         /// </summary>
-        public void DeactivateSeat()
+        /// <returns>True if deactivation was initiated, false if blocked (offline or no license)</returns>
+        public bool DeactivateSeat()
         {
-            if (_activeLicense == null) return;
+            if (_activeLicense == null) return false;
+
+            // Block signout when offline to prevent abuse
+            // (User could go offline, signout, share license, then claim they were offline)
+            if (Application.internetReachability == NetworkReachability.NotReachable)
+            {
+                Debug.LogWarning("[LTLM] Cannot sign out while offline. Please connect to the internet.");
+                return false;
+            }
 
             var request = new HeartbeatRequest
             {
@@ -507,18 +560,208 @@ namespace LTLM.SDK.Unity
                 isClosing = true
             };
 
-            // Use coroutine for normal deactivation (async)
+            // Use skipNonce=true to prevent nonce desync on app close
             StartCoroutine(_client.PostEncrypted<HeartbeatRequest, LicenseData>(
                 "/v1/sdk/pro/license/heartbeat",
                 request,
                 _ => Debug.Log("[LTLM] Seat released successfully."),
-                _ => { }
+                _ => { },
+                skipNonce: true
+            ));
+
+            return true;
+        }
+
+        // ============================================================
+        // SEAT MANAGEMENT METHODS
+        // ============================================================
+
+        /// <summary>
+        /// Gets a list of all devices currently holding seats on this license.
+        /// Use when status is VALID_NO_SEAT to show seat management UI.
+        /// </summary>
+        public void GetActiveSeats(Action<GetSeatsResponse> onSuccess, Action<string> onError = null)
+        {
+            if (_activeLicense == null)
+            {
+                onError?.Invoke("No active license");
+                return;
+            }
+
+            if (_activeLicense.seatsEnabled == false)
+            {
+                Debug.LogWarning("[LTLM] Seat management is disabled for this license. GetActiveSeats will fail or return empty.");
+            }
+
+            string hwid = DeviceID.GetHWID();
+            string endpoint = $"/v1/sdk/license/{_activeLicense.licenseKey}/seats?hwid={hwid}";
+
+            StartCoroutine(_client.GetRequest<GetSeatsResponse>(
+                endpoint,
+                onSuccess,
+                onError
             ));
         }
 
         /// <summary>
+        /// Releases another device's seat so this device can claim it.
+        /// </summary>
+        /// <param name="targetHwid">The HWID of the device to disconnect</param>
+        /// <param name="claimSeat">If true, this device will claim the released seat</param>
+        /// <param name="onSuccess">Called on successful release</param>
+        /// <param name="onError">Called on error</param>
+        public void ReleaseSeat(string targetHwid, bool claimSeat, Action<ReleaseSeatResponse> onSuccess, Action<string> onError = null)
+        {
+            if (_activeLicense == null)
+            {
+                onError?.Invoke("No active license");
+                return;
+            }
+
+            if (_activeLicense.seatsEnabled == false)
+            {
+                onError?.Invoke("Seat management is disabled for this license.");
+                return;
+            }
+
+            var request = new ReleaseSeatRequest
+            {
+                targetHwid = targetHwid,
+                callerHwid = DeviceID.GetHWID(),
+                claimSeat = claimSeat
+            };
+
+            StartCoroutine(_client.PostEncrypted<ReleaseSeatRequest, ReleaseSeatResponse>(
+                $"/v1/sdk/license/{_activeLicense.licenseKey}/release-seat",
+                request,
+                response => {
+                    if (response.seatClaimed)
+                    {
+                        Debug.Log("[LTLM] Seat claimed successfully!");
+                        // Re-validate to get updated license state
+                        ValidateLicense(_activeLicense.licenseKey);
+                    }
+                    onSuccess?.Invoke(response);
+                },
+                onError
+            ));
+        }
+
+        /// <summary>
+        /// Attempts to reactivate a seat after being kicked.
+        /// <para>Call this after receiving a Kicked status or OnKicked event.</para>
+        /// <para>If a seat is available, it will be claimed and the heartbeat resumed.</para>
+        /// </summary>
+        /// <param name="onSuccess">Called with updated license data if reactivation succeeds</param>
+        /// <param name="onError">Called if reactivation fails (e.g., no seats available)</param>
+        public void ReactivateSeat(Action<LicenseData, LicenseStatus> onSuccess = null, Action<string> onError = null)
+        {
+            if (_activeLicense == null)
+            {
+                onError?.Invoke("No active license to reactivate.");
+                return;
+            }
+
+            Debug.Log("[LTLM] Attempting seat reactivation...");
+
+            // Re-validate the license - this will attempt to claim a seat
+            ValidateLicense(_activeLicense.licenseKey, 
+                (license, status) => {
+                    if (status == LicenseStatus.Active)
+                    {
+                        Debug.Log("[LTLM] Seat reactivation successful!");
+                        onSuccess?.Invoke(license, status);
+                    }
+                    else if (status == LicenseStatus.ValidNoSeat)
+                    {
+                        Debug.LogWarning("[LTLM] Reactivation failed: No seats available.");
+                        onError?.Invoke("No seats available. All concurrent seats are in use.");
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[LTLM] Reactivation returned status: {status}");
+                        onSuccess?.Invoke(license, status);
+                    }
+                },
+                onError
+            );
+        }
+
+        /// <summary>
+        /// Helper method to process seat status and fire events.
+        /// Called after heartbeats and validations.
+        /// </summary>
+        private void ProcessSeatStatus(LicenseData license)
+        {
+            if (license == null) return;
+
+            // Check if we were kicked - handle this FIRST before seat status
+            if (license.status == "KICKED" || license.seatStatus == "KICKED" || license.kickedNotice != null)
+            {
+                string kickedBy = license.kickedNotice?.kickedByNickname ?? license.kickedNotice?.kickedBy ?? "another device";
+                Debug.LogWarning($"[LTLM] KICKED: Your session was terminated by {kickedBy}. You must reactivate to continue.");
+                
+                // Stop heartbeat - don't keep trying to auto-register
+                if (_heartbeatRoutine != null)
+                {
+                    StopCoroutine(_heartbeatRoutine);
+                    _heartbeatRoutine = null;
+                }
+                
+                // Fire events
+                OnSeatStatusChanged?.Invoke("KICKED", license.activeSeats ?? 0, license.maxConcurrentSeats ?? 0);
+                if (license.kickedNotice != null)
+                {
+                    OnKicked?.Invoke(license.kickedNotice);
+                }
+                
+                // Fire validation event as invalid (forces UI to show reactivation prompt)
+                OnValidationCompleted?.Invoke(false, LicenseStatus.Kicked);
+                OnLicenseStatusChanged?.Invoke(LicenseStatus.Kicked);
+                return;
+            }
+
+            // Check for VALID_NO_SEAT status - seat was lost during heartbeat
+            if (license.status == "VALID_NO_SEAT" || license.seatStatus == "NO_SEAT")
+            {
+                Debug.LogWarning("[LTLM] VALID_NO_SEAT: License is valid but no seat is available.");
+                
+                // Fire events to notify UI of seat loss
+                OnSeatStatusChanged?.Invoke("NO_SEAT", license.activeSeats ?? 0, license.maxConcurrentSeats ?? 0);
+                OnValidationCompleted?.Invoke(true, LicenseStatus.ValidNoSeat);
+                OnLicenseStatusChanged?.Invoke(LicenseStatus.ValidNoSeat);
+                return;
+            }
+
+            // Fire seat status changed event for normal status
+            if (!string.IsNullOrEmpty(license.seatStatus))
+            {
+                OnSeatStatusChanged?.Invoke(
+                    license.seatStatus,
+                    license.activeSeats ?? 0,
+                    license.maxConcurrentSeats ?? 0
+                );
+                
+                // If status is OCCUPIED (has seat), fire active status
+                if (license.seatStatus == "OCCUPIED")
+                {
+                    var status = GetLicenseStatus();
+                    OnLicenseStatusChanged?.Invoke(status);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Clears the stored nonce to force a fresh nonce chain on next activation.
+        /// </summary>
+        private void ClearStoredNonce()
+        {
+            SecureStorage.Delete("nonce_" + projectId, DeviceID.GetHWID());
+        }
+
+        /// <summary>
         /// Synchronous/fire-and-forget seat release for application quit scenarios.
-        /// Uses direct UnityWebRequest to attempt seat release before app terminates.
+        /// Clears the stored nonce to prevent desync issues on next startup.
         /// </summary>
         private void DeactivateSeatSync()
         {
@@ -526,8 +769,9 @@ namespace LTLM.SDK.Unity
 
             try
             {
-                // Fire-and-forget: We attempt the request but don't wait for completion
-                // This is the best we can do during OnApplicationQuit as coroutines won't complete
+                // Clear stored nonce FIRST to prevent desync if the request doesn't complete
+                ClearStoredNonce();
+
                 var request = new HeartbeatRequest
                 {
                     key = _activeLicense.licenseKey,
@@ -535,10 +779,9 @@ namespace LTLM.SDK.Unity
                     isClosing = true
                 };
 
-                // Log the attempt - actual release may or may not complete
                 Debug.Log("[LTLM] Attempting seat release on quit...");
                 
-                // Start coroutine anyway - it will send the request even if callback doesn't fire
+                // Fire-and-forget: start request but it may not complete before app terminates
                 StartCoroutine(_client.PostEncrypted<HeartbeatRequest, LicenseData>(
                     "/v1/sdk/pro/license/heartbeat",
                     request,
@@ -561,6 +804,15 @@ namespace LTLM.SDK.Unity
 
             if (_activeLicense == null) return false;
 
+            // Check if offline mode is enabled by the policy
+            if (_activeLicense.offlineEnabled.HasValue && !_activeLicense.offlineEnabled.Value)
+            {
+                Debug.LogError("[LTLM] Offline mode is DISABLED for this license. Connection required.");
+                _activeLicense.status = "connection_required";
+                ProcessEnforcement(_activeLicense);
+                return false;
+            }
+
             string rawLastSync = SecureStorage.Load("last_successful_sync_" + projectId, DeviceID.GetHWID());
             if (!long.TryParse(rawLastSync, out long ticks)) return false;
 
@@ -568,17 +820,21 @@ namespace LTLM.SDK.Unity
             DateTime now = SecureClock.GetEffectiveTime(projectId);
             TimeSpan offlineDuration = now - lastSync;
 
-            // Resolve offline grace period 
-            float graceHours = 24f; // Default if not found in policy
-            
-            if (_activeLicense.config != null && _activeLicense.config.ContainsKey("limits"))
+            // Use server-specified offline grace hours (default 0 = no grace period)
+            float graceHours = 0f; // Default: no offline grace (require connection immediately)
+            if (_activeLicense.offlineGraceHours.HasValue && _activeLicense.offlineGraceHours.Value > 0)
             {
-                try {
-                    var limits = JsonConvert.DeserializeObject<PolicyLimits>(JsonConvert.SerializeObject(_activeLicense.config["limits"]));
-                    if (limits.time != null) {
-                        graceHours = limits.time.gracePeriodDays * 24f;
-                    }
-                } catch {}
+                graceHours = _activeLicense.offlineGraceHours.Value;
+            }
+
+            // If graceHours is 0, offline is not allowed at all
+            if (graceHours <= 0)
+            {
+                Debug.LogError("[LTLM] No offline grace period configured. Connection required.");
+                _activeLicense.status = "connection_required";
+                ProcessEnforcement(_activeLicense);
+                OnLicenseStatusChanged?.Invoke(LicenseStatus.ConnectionRequired);
+                return false;
             }
 
             if (offlineDuration.TotalHours > graceHours)
@@ -589,11 +845,14 @@ namespace LTLM.SDK.Unity
                 // Lockdown the SDK
                 _activeLicense.status = "connection_required";
                 ProcessEnforcement(_activeLicense);
+                OnLicenseStatusChanged?.Invoke(LicenseStatus.ConnectionRequired);
                 return false;
             }
             else
             {
                 Debug.LogWarning($"[LTLM] Running in offline grace mode. {graceHours - offlineDuration.TotalHours:F1} hours remaining.");
+                // Fire GracePeriod status so UI knows we're in grace mode
+                OnLicenseStatusChanged?.Invoke(LicenseStatus.GracePeriod);
                 return true;
             }
         }
@@ -622,7 +881,60 @@ namespace LTLM.SDK.Unity
 
         private void ProcessEnforcement(LicenseData license)
         {
-            // HWID Check: Verify if this device is still registered to the license
+            if (license == null) return;
+
+            // 1. Force Heartbeat Interval from server settings
+            // If server specifies an interval, it MUST be used, overriding inspector settings.
+            if (license.heartbeatIntervalSeconds.HasValue && license.heartbeatIntervalSeconds.Value > 0)
+            {
+                float serverInterval = license.heartbeatIntervalSeconds.Value;
+                if (Mathf.Abs(heartbeatIntervalSeconds - serverInterval) > 0.1f)
+                {
+                    Debug.Log($"[LTLM] Server forced heartbeat interval change: {heartbeatIntervalSeconds}s -> {serverInterval}s");
+                    heartbeatIntervalSeconds = serverInterval;
+                    
+                    // Restart heartbeat routine to apply the new interval immediately
+                    if (_heartbeatRoutine != null)
+                    {
+                        StopCoroutine(_heartbeatRoutine);
+                        _heartbeatRoutine = StartCoroutine(HeartbeatRoutine());
+                    }
+                }
+            }
+
+            // 2. Feature Enforcement (Hard-blocking or warning based on license capabilities)
+            
+            // Token Enforcement
+            if (license.tokensEnabled == false)
+            {
+                // If developer tries to consume tokens but they are disabled
+                if (_pendingConsumptions.Count > 0)
+                {
+                    Debug.LogError("[LTLM] ENFORCEMENT ERROR: Application is attempting to use tokens, but Token Consumption is DISABLED for this license. Please check your policy settings in the LTLM Portal.");
+                }
+            }
+
+            // Seat Enforcement
+            if (license.seatsEnabled == false)
+            {
+                // If seats are disabled but status is VALID_NO_SEAT, something is wrong on server or local state
+                if (license.status == "VALID_NO_SEAT")
+                {
+                    Debug.LogError("[LTLM] ENFORCEMENT ERROR: License status is VALID_NO_SEAT but Seats are DISABLED. This license does not support concurrent seats.");
+                }
+            }
+
+            // Offline Mode Enforcement
+            if (license.offlineEnabled == false)
+            {
+                if (Application.internetReachability == NetworkReachability.NotReachable)
+                {
+                    Debug.LogError("[LTLM] ENFORCEMENT ERROR: Offline mode is DISABLED for this license. An active internet connection is required to continue using this software.");
+                    // In a production app, you would fire an event here to show a "Please Connect" overlay
+                }
+            }
+
+            // 3. HWID Check: Verify if this device is still registered to the license
             string currentHwid = DeviceID.GetHWID();
             bool isDeviceAuthorized = false;
             
@@ -726,8 +1038,15 @@ namespace LTLM.SDK.Unity
 
         public bool HasCapability(string featureName)
         {
-            if (_activeLicense == null || _activeLicense.features == null) return false;
-            if (_activeLicense.features.TryGetValue(featureName, out object val)) {
+            if (_activeLicense == null || _activeLicense.config == null) return false;
+            
+            // Access features from config
+            if (!_activeLicense.config.TryGetValue("features", out object featuresObj) || featuresObj == null) return false;
+            
+            var features = featuresObj as Dictionary<string, object>;
+            if (features == null) return false;
+            
+            if (features.TryGetValue(featureName, out object val)) {
                 if (val == null) return false;
                 string sVal = val.ToString().ToLower();
                 return sVal == "true" || sVal == "1";
@@ -737,8 +1056,15 @@ namespace LTLM.SDK.Unity
 
         public object GetMetadata(string key)
         {
-            if (_activeLicense == null || _activeLicense.metadata == null) return null;
-            if (_activeLicense.metadata.TryGetValue(key, out object val)) return val;
+            if (_activeLicense == null || _activeLicense.config == null) return null;
+            
+            // Access metadata from config
+            if (!_activeLicense.config.TryGetValue("metadata", out object metadataObj) || metadataObj == null) return null;
+            
+            var metadata = metadataObj as Dictionary<string, object>;
+            if (metadata == null) return null;
+            
+            if (metadata.TryGetValue(key, out object val)) return val;
             return null;
         }
 
@@ -788,12 +1114,14 @@ namespace LTLM.SDK.Unity
             switch (_activeLicense.status?.ToLower())
             {
                 case "active": return LicenseStatus.Active;
+                case "valid_no_seat": return LicenseStatus.ValidNoSeat;
                 case "grace_period": return LicenseStatus.GracePeriod;
                 case "expired": return LicenseStatus.Expired;
                 case "suspended": return LicenseStatus.Suspended;
                 case "revoked": return LicenseStatus.Revoked;
                 case "terminated": return LicenseStatus.Terminated;
                 case "connection_required": return LicenseStatus.ConnectionRequired;
+                case "kicked": return LicenseStatus.Kicked;
             }
 
             return LicenseStatus.Active;
@@ -940,6 +1268,11 @@ namespace LTLM.SDK.Unity
         public void ConsumeTokens(int amount, string action, Action<LicenseData> onConsumed = null, Action<string> onError = null)
         {
             if (_activeLicense == null) return;
+
+            if (_activeLicense.tokensEnabled == false)
+            {
+                Debug.LogWarning("[LTLM] Token consumption is disabled for this license. Usage will be recorded on device but may be rejected by server.");
+            }
 
             // 1. Create the consumption log
             var usage = new ConsumptionRequest

@@ -39,11 +39,17 @@ Set grace period in your policy (dashboard):
 
 ```json
 {
-  "limits": {
-    "offlineGracePeriodHours": 72
+  "sdkEnforcement": {
+    "offlineGracePeriod": {
+      "enabled": true,
+      "duration": 72
+    }
   }
 }
 ```
+
+> [!NOTE]
+> The server includes `offlineEnabled` and `offlineGraceHours` in every license response. The SDK uses these values to determine if offline mode is allowed and for how long.
 
 ### Checking Grace Status
 

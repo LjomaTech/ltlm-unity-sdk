@@ -120,22 +120,128 @@ public void OnSignOutClicked()
 
 ## Handling Seat Limits
 
-### When Seats Are Full
+### ValidNoSeat Status
+
+When all seats are occupied, the SDK returns `ValidNoSeat` status instead of `Active`:
 
 ```csharp
-void HandleActivationError(string error)
-{
-    if (error.Contains("seat limit") || error.Contains("Concurrent"))
-    {
-        ShowDialog(
-            title: "All Seats In Use",
-            message: $"Your team license is at capacity. " +
-                     $"Ask a teammate to sign out, or wait for an inactive session to expire.",
-            actions: new[] {
-                ("Retry", () => LTLMManager.Instance.ActivateLicense(key)),
-                ("Cancel", () => { })
+LTLMManager.Instance.ActivateLicense("TEAM-LICENSE-KEY",
+    (license, status) => {
+        if (status == LicenseStatus.ValidNoSeat)
+        {
+            // License is valid but no seat available
+            Debug.Log($"All {license.maxConcurrentSeats} seats occupied");
+            ShowSeatManagementUI();
+        }
+    },
+    error => Debug.LogError(error)
+);
+```
+
+### Remote Seat Release (Kick Other Devices)
+
+Users can release another device's seat to claim it for themselves:
+
+```csharp
+// 1. Get list of active seats
+LTLMManager.Instance.GetActiveSeats(
+    response => {
+        foreach (var seat in response.seats)
+        {
+            if (!seat.isCurrentDevice)
+            {
+                // Show this device with a "Disconnect" button
+                AddSeatRow(seat.nickname ?? seat.hwid, seat.lastSeen, () => {
+                    ReleaseSeatAndClaim(seat.hwid);
+                });
             }
-        );
+        }
+    },
+    error => Debug.LogError(error)
+);
+
+// 2. Release a seat and claim it
+void ReleaseSeatAndClaim(string targetHwid)
+{
+    LTLMManager.Instance.ReleaseSeat(targetHwid, claimSeat: true,
+        response => {
+            if (response.seatClaimed)
+            {
+                Debug.Log("Seat claimed! Starting heartbeat...");
+                StartHeartbeat();
+            }
+        },
+        error => {
+            if (error.Contains("cooldown"))
+            {
+                ShowMessage("Please wait before releasing another seat.");
+            }
+        }
+    );
+}
+```
+
+> [!NOTE]
+> **Cooldown:** If `seatReleaseCooldownSeconds` is configured, users must wait between releases.
+
+---
+
+## Handling KICKED Status
+
+When another device releases your seat, you receive the `KICKED` status:
+
+### Using OnKicked Event (Recommended)
+
+```csharp
+void OnEnable()
+{
+    LTLMManager.OnKicked += HandleKicked;
+}
+
+void HandleKicked(KickedNotice notice)
+{
+    // Stop heartbeat immediately
+    StopHeartbeat();
+    
+    // Show who kicked you
+    string message = notice.kickedByNickname != null
+        ? $"Your session was ended by '{notice.kickedByNickname}'"
+        : "Your session was ended by another device";
+    
+    ShowDialog(
+        title: "Session Ended",
+        message: message,
+        actions: new[] {
+            ("Try Again", () => ReactivateLicense()),
+            ("OK", () => ShowLoginScreen())
+        }
+    );
+}
+
+void OnDisable()
+{
+    LTLMManager.OnKicked -= HandleKicked;
+}
+```
+
+### Checking Status in Heartbeat
+
+The `KICKED` status is also returned in heartbeat responses:
+
+```csharp
+IEnumerator HeartbeatLoop()
+{
+    while (isActive)
+    {
+        var response = await SendHeartbeat();
+        
+        if (response.status == "KICKED" || response.kickedNotice != null)
+        {
+            HandleKicked(response.kickedNotice);
+            yield break; // Stop loop
+        }
+        
+        yield return new WaitForSeconds(response.heartbeatIntervalSeconds);
     }
 }
 ```

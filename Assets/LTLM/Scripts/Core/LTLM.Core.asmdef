@@ -8,8 +8,7 @@
     "overrideReferences": false,
     "precompiledReferences": [
         "BouncyCastle.Cryptography.dll",
-        "Newtonsoft.Json.dll",
-        "Microsoft.Win32"
+        "Newtonsoft.Json.dll"
     ],
     "autoReferenced": true,
     "defineConstraints": [],

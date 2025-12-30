@@ -179,7 +179,101 @@ public void OnSignOutClicked()
 Releases the seat on the server. Use when user signs out.
 
 ```csharp
-LTLMManager.Instance.DeactivateSeat();
+bool success = LTLMManager.Instance.DeactivateSeat();
+```
+
+**Returns:** `true` if deactivation was initiated, `false` if blocked.
+
+**Important:** This method requires network connectivity. Signout is blocked when offline to prevent license abuse (sharing license by going offline and signing out).
+
+**Example:**
+```csharp
+public void OnSignOutClicked()
+{
+    if (!LTLMManager.Instance.DeactivateSeat())
+    {
+        ShowToast("Cannot sign out while offline. Please connect to the internet.");
+        return;
+    }
+    
+    LTLMManager.Instance.ClearLicenseCache();
+    ShowLoginScreen();
+}
+```
+
+---
+
+## Seat Management Methods
+
+### IsWaitingForSeat
+
+Returns `true` if the license is valid but waiting for an available seat.
+
+```csharp
+if (LTLMManager.Instance.IsWaitingForSeat)
+{
+    ShowSeatManagementUI();
+}
+```
+
+---
+
+### GetActiveSeats
+
+Gets a list of all devices currently holding seats on this license.
+
+```csharp
+LTLMManager.Instance.GetActiveSeats(
+    onSuccess,       // Action<GetSeatsResponse>: Success callback
+    onError          // Action<string>: Error callback
+);
+```
+
+**Example:**
+```csharp
+LTLMManager.Instance.GetActiveSeats(
+    response => {
+        Debug.Log($"Seats: {response.activeSeats}/{response.maxSeats}");
+        foreach (var seat in response.seats)
+        {
+            Debug.Log($"Device: {seat.nickname ?? seat.hwid}");
+        }
+    },
+    error => Debug.LogError(error)
+);
+```
+
+---
+
+### ReleaseSeat
+
+Releases another device's seat so this device can claim it.
+
+```csharp
+LTLMManager.Instance.ReleaseSeat(
+    targetHwid,      // string: HWID of device to disconnect
+    claimSeat,       // bool: Claim the seat after release
+    onSuccess,       // Action<ReleaseSeatResponse>: Success callback
+    onError          // Action<string>: Error callback
+);
+```
+
+**Example:**
+```csharp
+LTLMManager.Instance.ReleaseSeat("abc123...", claimSeat: true,
+    response => {
+        if (response.seatClaimed)
+        {
+            Debug.Log("Seat claimed!");
+        }
+    },
+    error => {
+        if (error.Contains("wait"))
+        {
+            // Cooldown active
+        }
+    }
+);
 ```
 
 ---
@@ -308,6 +402,51 @@ if (maxProjects != null)
     Debug.Log("Project limit: " + limit);
 }
 ```
+
+---
+
+## Analytics Methods
+
+### LogEvent
+
+Logs a custom analytics event to the LTLM server. Use for tracking feature usage, user behavior, or custom metrics.
+
+```csharp
+LTLMManager.Instance.LogEvent(
+    eventType,       // string: Event type identifier
+    payload          // Dictionary<string, object>: Optional event data
+);
+```
+
+**Example:**
+```csharp
+// Track feature usage
+LTLMManager.Instance.LogEvent("feature_used", new Dictionary<string, object> {
+    { "feature", "ai_upscale" },
+    { "duration_ms", 4500 },
+    { "input_size", "1080p" }
+});
+
+// Track export
+LTLMManager.Instance.LogEvent("export_completed", new Dictionary<string, object> {
+    { "format", "mp4" },
+    { "quality", "4K" },
+    { "file_size_mb", 245 }
+});
+
+// Track session start
+LTLMManager.Instance.LogEvent("session_started", new Dictionary<string, object> {
+    { "version", Application.version },
+    { "platform", Application.platform.ToString() }
+});
+```
+
+**Use Cases:**
+- Track which features are most used
+- Monitor performance metrics
+- Log errors or warnings
+- Measure user engagement
+- A/B testing data
 
 ---
 
@@ -460,16 +599,138 @@ LTLMManager.OnValidationCompleted += (success, status) => {
 
 ---
 
+### OnSeatStatusChanged
+
+Fired when seat status changes (for concurrent licensing).
+
+```csharp
+void OnEnable()
+{
+    LTLMManager.OnSeatStatusChanged += OnSeatChanged;
+}
+
+void OnSeatChanged(string seatStatus, int activeSeats, int maxSeats)
+{
+    // seatStatus: "OCCUPIED", "NO_SEAT", or "RELEASED"
+    seatLabel.text = $"Seats: {activeSeats}/{maxSeats}";
+    
+    if (seatStatus == "NO_SEAT")
+    {
+        ShowWaitingForSeatUI();
+    }
+}
+
+void OnDisable()
+{
+    LTLMManager.OnSeatStatusChanged -= OnSeatChanged;
+}
+```
+
+---
+
+### OnKicked
+
+Fired when another device releases your seat.
+
+```csharp
+void OnEnable()
+{
+    LTLMManager.OnKicked += HandleKicked;
+}
+
+void HandleKicked(KickedNotice notice)
+{
+    string message = notice.kickedByNickname != null
+        ? $"Session ended by '{notice.kickedByNickname}'"
+        : "Session ended by another device";
+    
+    ShowToast(message);
+    TransitionToWaitingMode();
+}
+
+void OnDisable()
+{
+    LTLMManager.OnKicked -= HandleKicked;
+}
+```
+
+---
+
+### OnLicenseStatusChanged
+
+Fired whenever the license status changes (including during offline grace checks).
+
+```csharp
+void OnEnable()
+{
+    LTLMManager.OnLicenseStatusChanged += HandleStatusChange;
+}
+
+void HandleStatusChange(LicenseStatus status)
+{
+    switch (status)
+    {
+        case LicenseStatus.Active:
+            HideAllWarnings();
+            break;
+        case LicenseStatus.GracePeriod:
+            ShowGraceWarning();
+            break;
+        case LicenseStatus.Expired:
+            ShowRenewalRequired();
+            break;
+        case LicenseStatus.ConnectionRequired:
+            ShowOfflineExpiredMessage();
+            break;
+        case LicenseStatus.Kicked:
+            ShowKickedMessage();
+            break;
+        case LicenseStatus.WaitingForSeat:
+            ShowSeatManagementUI();
+            break;
+    }
+}
+
+void OnDisable()
+{
+    LTLMManager.OnLicenseStatusChanged -= HandleStatusChange;
+}
+```
+
+**Use Cases:**
+- Update UI when license state changes
+- Show appropriate banners/popups
+- Handle offline grace period expiration
+- React to being kicked from seat
+
+---
+
+## Events Summary
+
+| Event | Parameters | When Fired |
+|-------|------------|------------|
+| `OnValidationStarted` | none | Validation request begins |
+| `OnValidationCompleted` | `bool success, LicenseStatus status` | Validation finishes |
+| `OnLicenseStatusChanged` | `LicenseStatus status` | Any license state change |
+| `OnTokensConsumed` | `LicenseData license` | After tokens consumed |
+| `OnSeatStatusChanged` | `string seatStatus, int active, int max` | Seat allocation changes |
+| `OnKicked` | `KickedNotice notice` | Seat released by another device |
+
+---
+
 ## Inspector Settings
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `projectId` | string | - | Your project ID from dashboard |
-| `publicKey` | string | - | Ed25519 public key |
-| `secretKey` | string | - | AES-256 secret key |
-| `heartbeatIntervalSeconds` | float | 300 | Seconds between heartbeats |
-| `autoValidateOnStart` | bool | true | Auto-validate stored license |
-| `softwareVersion` | string | - | Your app version |
+| `publicKey` | string | - | Ed25519 public key for signature verification |
+| `secretKey` | string | - | AES-256 secret key for encryption |
+| `heartbeatIntervalSeconds` | float | 300 | Local default (⚠️ server value takes priority!) |
+| `autoValidateOnStart` | bool | true | Auto-validate stored license on startup |
+| `softwareVersion` | string | - | Your app version (checked against policy versioning) |
+
+> [!IMPORTANT]
+> The `heartbeatIntervalSeconds` in Inspector is only a fallback. The server returns `heartbeatIntervalSeconds` in every response, and the SDK automatically uses that value instead.
 
 ---
 

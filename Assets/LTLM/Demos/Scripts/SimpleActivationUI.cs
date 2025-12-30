@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using LTLM.SDK.Core.Models;
 using UnityEngine;
 using UnityEngine.UI;
@@ -93,6 +94,13 @@ namespace LTLM.SDK.Demos
             {
                 ShowLicensedPanel();
             }
+            else if (success && status == LicenseStatus.ValidNoSeat)
+            {
+                // License valid but all seats are occupied
+                ShowActivationPanel();
+                activationStatusText.text = "License valid but all seats are in use. Close the app on another device.";
+                activationStatusText.color = Color.yellow;
+            }
             else if (success && status == LicenseStatus.GracePeriod)
             {
                 ShowLicensedPanel();
@@ -171,7 +179,14 @@ namespace LTLM.SDK.Demos
 
         private void OnSignOutClicked()
         {
-            LTLMManager.Instance.DeactivateSeat();
+            // DeactivateSeat returns false if offline (abuse prevention)
+            if (!LTLMManager.Instance.DeactivateSeat())
+            {
+                activationStatusText.text = "Cannot sign out while offline. Connect to the internet.";
+                activationStatusText.color = Color.yellow;
+                return;
+            }
+            
             LTLMManager.Instance.ClearLicenseCache();
             licenseKeyInput.text = "";
             ShowActivationPanel();
@@ -242,10 +257,14 @@ namespace LTLM.SDK.Demos
                 // You can access custom settings like:
                 // license.config["customSetting"]
             }
-
-            if (license.metadata != null)
+            // Example: Access metadata from config
+            if (license.config.ContainsKey("metadata"))
             {
-                Debug.Log("[Demo] License metadata: " + license.metadata.Count + " entries");
+                var metadata = license.config["metadata"] as Dictionary<string, object>;
+                if (metadata != null)
+                {
+                    Debug.Log("[Demo] License metadata: " + metadata.Count + " entries");
+                }
             }
         }
 

@@ -54,9 +54,12 @@ After activation, check the status to know what to do next:
 
 | Status | Meaning | What to Do |
 |--------|---------|------------|
-| `Active` | License is valid | Enable all features |
+| `Active` | License is valid, seat occupied | Enable all features |
+| `ValidNoSeat` | Valid but all seats are occupied | Show seat management UI |
+| `Kicked` | Seat released by another device | Show reactivation prompt |
 | `Expired` | Past expiration date | Show renewal prompt |
 | `GracePeriod` | Expired but grace period active | Show warning, enable features |
+| `ConnectionRequired` | Offline grace exceeded | Block until online |
 | `Suspended` | Admin suspended this license | Show "contact support" |
 | `Revoked` | License permanently cancelled | Block access |
 
@@ -71,6 +74,17 @@ void OnActivationSuccess(LicenseData license, LicenseStatus status)
             // Full access
             ShowMainMenu();
             break;
+        
+        case LicenseStatus.ValidNoSeat:
+            // License valid but no seat available
+            ShowSeatManagementUI();
+            break;
+            
+        case LicenseStatus.Kicked:
+            // Seat was released by another device
+            ShowKickedMessage(license.kickedNotice);
+            ShowReactivateButton();
+            break;
             
         case LicenseStatus.Expired:
             // License expired
@@ -82,6 +96,11 @@ void OnActivationSuccess(LicenseData license, LicenseStatus status)
             int daysLeft = CalculateDaysLeft(license.gracePeriodEnds);
             ShowGraceWarning(daysLeft);
             ShowMainMenu();
+            break;
+            
+        case LicenseStatus.ConnectionRequired:
+            // Offline grace exceeded
+            ShowConnectionRequiredMessage();
             break;
             
         case LicenseStatus.Suspended:

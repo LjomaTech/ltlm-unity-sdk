@@ -57,9 +57,12 @@ manager.secretKey = "your-64-char-hex-secret";
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `heartbeatIntervalSeconds` | 300 | Time between heartbeats (seconds) |
+| `heartbeatIntervalSeconds` | 300 | Fallback interval (⚠️ server value takes priority!) |
 | `autoValidateOnStart` | true | Auto-validate stored license on Start() |
-| `softwareVersion` | Application.version | Your app version for gating |
+| `softwareVersion` | Application.version | Your app version (used for version-gating) |
+
+> [!IMPORTANT]
+> The `heartbeatIntervalSeconds` value from the server is included in every license response. The SDK automatically uses that value for scheduling heartbeats. The Inspector value is only a fallback if the server doesn't respond.
 
 ---
 

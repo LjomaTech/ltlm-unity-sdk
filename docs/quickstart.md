@@ -88,14 +88,26 @@ public class LicenseActivation : MonoBehaviour
 
     void OnActivationSuccess(LicenseData license, LicenseStatus status)
     {
-        if (status == LicenseStatus.Active)
+        switch (status)
         {
-            statusText.text = "License activated successfully!";
-            // Proceed to your main menu
-        }
-        else if (status == LicenseStatus.Expired)
-        {
-            statusText.text = "This license has expired. Please renew.";
+            case LicenseStatus.Active:
+                statusText.text = "License activated successfully!";
+                // Proceed to your main menu
+                break;
+            case LicenseStatus.ValidNoSeat:
+                statusText.text = "All seats occupied. Try again later.";
+                // Optionally show seat management UI
+                break;
+            case LicenseStatus.Expired:
+                statusText.text = "This license has expired. Please renew.";
+                break;
+            case LicenseStatus.GracePeriod:
+                statusText.text = "License expires soon. Please renew.";
+                // Still allow access
+                break;
+            default:
+                statusText.text = "License status: " + status;
+                break;
         }
     }
 
