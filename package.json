@@ -1,0 +1,40 @@
+{
+    "name": "io.ltlm.sdk",
+    "version": "1.2.0",
+    "displayName": "LTLM SDK",
+    "description": "License & Token Management SDK for Unity. Manage software licenses, token-based usage, concurrent seats, and feature entitlements in your Unity applications.",
+    "unity": "2020.3",
+    "unityRelease": "0f1",
+    "documentationUrl": "https://github.com/ljomatech/ltlm-unity-sdk/tree/main/Assets/LTLM/Documentation~",
+    "changelogUrl": "https://github.com/ljomatech/ltlm-unity-sdk/blob/main/Assets/LTLM/CHANGELOG.md",
+    "licensesUrl": "https://github.com/ljomatech/ltlm-unity-sdk/blob/main/Assets/LTLM/LICENSE.md",
+    "keywords": [
+        "license",
+        "licensing",
+        "drm",
+        "protection",
+        "tokens",
+        "usage",
+        "entitlements",
+        "subscription",
+        "saas",
+        "seats"
+    ],
+    "author": {
+        "name": "Ljomatech",
+        "email": "support@ltlm.io",
+        "url": "https://ltlm.io"
+    },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/ljomatech/ltlm-unity-sdk.git"
+    },
+    "dependencies": {},
+    "samples": [
+        {
+            "displayName": "Demo Scenes",
+            "description": "Complete demo scenes showing license activation, token consumption, feature gates, and seat management.",
+            "path": "Demos~"
+        }
+    ]
+}
