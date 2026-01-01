@@ -71,6 +71,9 @@ namespace LTLM.SDK.Core.Models
         
         // Resolved config (access config["features"], config["metadata"] for custom data)
         public Dictionary<string, object> config;
+        
+        // User-defined settings (synced across devices)
+        public Dictionary<string, object> userSettings;
     }
 
     [Serializable]
@@ -392,4 +395,32 @@ namespace LTLM.SDK.Core.Models
         public string email;
         public List<LicenseData> licenses;
     }
+
+    #region User Settings (Cloud Sync)
+    
+    [Serializable]
+    public class UserSettingsRequest
+    {
+        public string key;
+        public string hwid;
+    }
+
+    [Serializable]
+    public class SaveUserSettingsRequest
+    {
+        public string key;
+        public string hwid;
+        public Dictionary<string, object> settings;
+    }
+
+    [Serializable]
+    public class UserSettingsResponse
+    {
+        public bool success;
+        public string message;
+        public Dictionary<string, object> settings;
+        public string updatedAt;
+    }
+    
+    #endregion
 }

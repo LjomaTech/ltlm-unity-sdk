@@ -687,6 +687,106 @@ namespace LTLM.SDK.Unity
             );
         }
 
+        #region User Settings (Cloud Sync)
+        
+        /// <summary>
+        /// Gets user settings from the server (synced across devices).
+        /// </summary>
+        /// <param name="onSuccess">Called with the settings dictionary</param>
+        /// <param name="onError">Called on error</param>
+        public void GetUserSettings(Action<Dictionary<string, object>> onSuccess, Action<string> onError = null)
+        {
+            if (_activeLicense == null)
+            {
+                onError?.Invoke("No active license. Activate first.");
+                return;
+            }
+
+            Debug.Log("[LTLM] Fetching user settings from server...");
+
+            var request = new UserSettingsRequest
+            {
+                key = _activeLicense.licenseKey,
+                hwid = DeviceID.GetHWID()
+            };
+
+            StartCoroutine(_client.PostEncrypted<UserSettingsRequest, UserSettingsResponse>(
+                "/v1/sdk/pro/license/settings/get",
+                request,
+                response => {
+                    Debug.Log("[LTLM] User settings retrieved successfully.");
+                    onSuccess?.Invoke(response.settings ?? new Dictionary<string, object>());
+                },
+                onError
+            ));
+        }
+
+        /// <summary>
+        /// Saves user settings to the server (synced across devices).
+        /// Maximum size: 64KB.
+        /// </summary>
+        /// <param name="settings">Dictionary of settings to save</param>
+        /// <param name="onSuccess">Called on successful save</param>
+        /// <param name="onError">Called on error</param>
+        public void SaveUserSettings(Dictionary<string, object> settings, Action onSuccess = null, Action<string> onError = null)
+        {
+            if (_activeLicense == null)
+            {
+                onError?.Invoke("No active license. Activate first.");
+                return;
+            }
+
+            if (settings == null)
+            {
+                onError?.Invoke("Settings cannot be null.");
+                return;
+            }
+
+            // Check size limit locally before sending
+            string jsonCheck = JsonConvert.SerializeObject(settings);
+            if (jsonCheck.Length > 65536)
+            {
+                onError?.Invoke($"Settings exceed maximum size of 64KB. Current size: {jsonCheck.Length} bytes.");
+                return;
+            }
+
+            Debug.Log("[LTLM] Saving user settings to server...");
+
+            var request = new SaveUserSettingsRequest
+            {
+                key = _activeLicense.licenseKey,
+                hwid = DeviceID.GetHWID(),
+                settings = settings
+            };
+
+            StartCoroutine(_client.PostEncrypted<SaveUserSettingsRequest, UserSettingsResponse>(
+                "/v1/sdk/pro/license/settings/save",
+                request,
+                response => {
+                    Debug.Log("[LTLM] User settings saved successfully.");
+                    // Update local cache
+                    if (_activeLicense != null)
+                    {
+                        _activeLicense.userSettings = settings;
+                        CacheLicense(_activeLicense);
+                    }
+                    onSuccess?.Invoke();
+                },
+                onError
+            ));
+        }
+
+        /// <summary>
+        /// Gets user settings from the local license cache (no network call).
+        /// Returns empty dictionary if no settings cached.
+        /// </summary>
+        public Dictionary<string, object> GetLocalUserSettings()
+        {
+            return _activeLicense?.userSettings ?? new Dictionary<string, object>();
+        }
+
+        #endregion
+
         /// <summary>
         /// Helper method to process seat status and fire events.
         /// Called after heartbeats and validations.
