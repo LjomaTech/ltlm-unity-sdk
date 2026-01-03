@@ -612,6 +612,158 @@ LTLMManager.Instance.CreateTopUpSession(
 
 ---
 
+### GetTopupPacks
+
+Fetches available token top-up packs for the current license.
+
+```csharp
+LTLMManager.Instance.GetTopupPacks(
+    onSuccess,       // Action<List<TopupPack>>: Success callback
+    onError          // Action<string>: Error callback
+);
+```
+
+---
+
+### Accessing Top-Up Options
+
+Top-up packs are included in the license data from activation/validation. Filter locally as needed:
+
+```csharp
+var license = LTLMManager.Instance.ActiveLicense;
+var topupOptions = license?.policy?.config?.customerActions?.topUpOptions;
+
+if (topupOptions != null && license.policy.config.customerActions.canBuyTopUps)
+{
+    foreach (var option in topupOptions)
+    {
+        Debug.Log($"{option.displayName}: {option.activations} activations for {option.price?.amount} {option.price?.currency}");
+    }
+}
+```
+
+> [!NOTE]
+> Top-up options are returned with each license activation/validation response. No separate API call needed.
+
+---
+
+## Customer Authentication (OTP)
+
+### RequestLoginOTP
+
+Request an OTP code to be sent to the customer's email.
+
+```csharp
+LTLMManager.Instance.RequestLoginOTP(
+    email,           // string: Customer email address
+    onSuccess,       // Action: Called when OTP sent
+    onError          // Action<string>: Error callback
+);
+```
+
+**Example:**
+```csharp
+LTLMManager.Instance.RequestLoginOTP("customer@example.com",
+    () => ShowOTPEntryScreen(),
+    error => Debug.LogError(error)
+);
+```
+
+---
+
+### VerifyLoginOTP
+
+Verify OTP code and retrieve customer's license portfolio.
+
+```csharp
+LTLMManager.Instance.VerifyLoginOTP(
+    email,           // string: Customer email address
+    otp,             // string: OTP code from email
+    onSuccess,       // Action<List<LicenseData>>: Customer's licenses
+    onError          // Action<string>: Error callback
+);
+```
+
+**Example:**
+```csharp
+LTLMManager.Instance.VerifyLoginOTP(email, otpCode,
+    licenses => {
+        foreach (var lic in licenses)
+            Debug.Log($"License: {lic.licenseKey}");
+    },
+    error => Debug.LogError(error)
+);
+```
+
+---
+
+### GetCustomerLicenses
+
+Returns cached list of customer licenses after OTP verification.
+
+```csharp
+List<LicenseData> licenses = LTLMManager.Instance.GetCustomerLicenses();
+```
+
+---
+
+### ClearCustomerSession
+
+Clears cached customer email and licenses (logout from OTP auth).
+
+```csharp
+LTLMManager.Instance.ClearCustomerSession();
+```
+
+---
+
+## Session Management
+
+### ReleaseSeat
+
+Releases the current seat (sign out) but keeps license data for later reactivation.
+
+```csharp
+LTLMManager.Instance.ReleaseSeat(
+    onSuccess,       // Action: Called on success
+    onError          // Action<string>: Error callback
+);
+```
+
+**Example:**
+```csharp
+LTLMManager.Instance.ReleaseSeat(
+    () => ShowLoginScreen(),
+    error => Debug.LogError(error)
+);
+```
+
+---
+
+### ReactivateSeat
+
+Reactivates a previously released seat.
+
+```csharp
+LTLMManager.Instance.ReactivateSeat(
+    onSuccess,       // Action: Called on success
+    onError          // Action<string>: Error callback
+);
+```
+
+---
+
+### DeleteLicenseData
+
+Completely removes all license data from the device. User will need to re-activate.
+
+```csharp
+LTLMManager.Instance.DeleteLicenseData();
+ShowActivationScreen();
+```
+
+---
+
 ## Events
 
 ### OnLicenseStatusChanged

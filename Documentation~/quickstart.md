@@ -170,6 +170,9 @@ public class AppStart : MonoBehaviour
 - [Feature Entitlements](entitlements.md) - Lock/unlock features
 - [Demo Scenes](demos/index.md) - Working examples
 
+> [!TIP]
+> **Want pre-built UI?** Check out the [LTLM UI Toolkit](https://github.com/ljomatech/ltlm-unity-ui) (`com.ltlm.sdk.ui`) for drop-in authentication, license management, and control panel screens.
+
 ---
 
 ## Need Help?

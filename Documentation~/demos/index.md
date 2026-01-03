@@ -12,9 +12,6 @@ Working examples showing how to use the LTLM SDK.
 | [Usage-Based Licensing](usage-based.md) | Token consumption for export features |
 | [Feature Entitlements](feature-gates.md) | Lock/unlock features by tier |
 | [Seat Management](seat-management.md) | Handle concurrent usage limits |
-| [Customer Portal](customer-portal.md) | Self-service license management |
-| [In-Game Store](in-game-store.md) | Purchase licenses and tokens |
-| [Offline Activation](offline-activation.md) | Air-gapped activation with .ltlm files |
 
 ---
 
