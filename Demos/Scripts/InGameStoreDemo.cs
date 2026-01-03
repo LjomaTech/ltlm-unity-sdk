@@ -59,15 +59,15 @@ namespace LTLM.SDK.Demos
                         string pricing = $"{p.price} {p.currency}";
                         if (p.type == "subscription")
                         {
-                            pricing += $" every {p.recurringIntervalCount} {p.recurringInterval}(s)";
+                            pricing += $" every {p.recurringInterval} {p.recurringInterval}(s)";
                         }
 
-                        list += $"• {p.name} ({p.shortDescription})\n";
+                        list += $"• {p.name} ({p.description})\n";
                         list += $"  Type: {p.type} | {pricing}\n";
-                        if (p.config?.limits != null)
-                        {
-                            list += $"  Limits: {p.config.limits.maxMachines} devices, {p.config.limits.maxActivations} activations\n";
-                        }
+                        // if (p.name?.limits != null)
+                        // {
+                        //     list += $"  Limits: {p.config.limits.maxMachines} devices, {p.config.limits.maxActivations} activations\n";
+                        // }
                         list += "\n";
                     }
                     storeInfoText.text = list;
