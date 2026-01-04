@@ -45,13 +45,13 @@ namespace LTLM.SDK.Editor
         [MenuItem("LTLM/Documentation", priority = 100)]
         public static void OpenDocumentation()
         {
-            Application.OpenURL("https://docs.ltlm.io");
+            Application.OpenURL("https://github.com/LjomaTech/ltlm-unity-sdk/tree/main/Documentation~");
         }
 
         [MenuItem("LTLM/Dashboard", priority = 101)]
         public static void OpenDashboard()
         {
-            Application.OpenURL("https://dashboard.ltlm.io");
+            Application.OpenURL("https://ltlm.ljomatech.com");
         }
 
         private void OnGUI()
@@ -98,20 +98,19 @@ namespace LTLM.SDK.Editor
             
             if (GUILayout.Button("Docs", GUILayout.Width(50)))
             {
-                Application.OpenURL("https://docs.ltlm.io");
+                Application.OpenURL("https://github.com/LjomaTech/ltlm-unity-sdk/tree/main/Documentation~");
             }
             
             if (GUILayout.Button("Dashboard", GUILayout.Width(70)))
             {
-                Application.OpenURL("https://dashboard.ltlm.io");
+                Application.OpenURL("https://ltlm.ljomatech.com");
             }
             
             EditorGUILayout.EndHorizontal();
             
             EditorGUILayout.Space(5);
             EditorGUILayout.HelpBox(
-                $"SDK Version: {LTLM.SDK.Core.LTLMConstants.Version}\n" +
-                $"Backend: {LTLM.SDK.Core.LTLMConstants.BackendUrl}",
+                $"SDK Version: {LTLM.SDK.Core.LTLMConstants.Version}\n",
                 MessageType.Info
             );
         }
@@ -181,10 +180,6 @@ namespace LTLM.SDK.Editor
             // Action buttons
             EditorGUILayout.BeginHorizontal();
             
-            if (GUILayout.Button("Test Connection"))
-            {
-                TestBackendConnection(settings);
-            }
             
             if (GUILayout.Button("Save Settings"))
             {
