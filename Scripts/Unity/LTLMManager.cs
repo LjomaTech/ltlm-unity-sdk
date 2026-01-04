@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using UnityEngine.Networking;
 using LTLM.SDK.Core;
 using LTLM.SDK.Core.Communication;
 using LTLM.SDK.Core.Models;
@@ -1230,40 +1231,35 @@ namespace LTLM.SDK.Unity
             DoesHaveTokens(required, onResult, false);
         }
 
+        /// <summary>
+        /// Checks if the license has a specific feature capability enabled.
+        /// Features are key-value pairs defined in the policy/project config.
+        /// </summary>
+        /// <param name="featureName">The feature name to check</param>
+        /// <returns>True if the feature is enabled ("true" or "1")</returns>
         public bool HasCapability(string featureName)
         {
-            if (_activeLicense == null || _activeLicense.config == null) return false;
+            if (_activeLicense?.config?.features == null) return false;
 
-            // Access features from config
-            if (!_activeLicense.config.TryGetValue("features", out object featuresObj) || featuresObj == null)
-                return false;
-
-            var features = JsonConvert.DeserializeObject<Dictionary<string, string>>(featuresObj.ToString());
-            if (features == null) return false;
-
-            if (features.TryGetValue(featureName, out string val))
+            if (_activeLicense.config.features.TryGetValue(featureName, out string val))
             {
                 if (val == null) return false;
-                string sVal = val.ToString().ToLower();
+                string sVal = val.ToLower();
                 return sVal == "true" || sVal == "1";
             }
 
             return false;
         }
 
-        public object GetMetadata(string key)
+        /// <summary>
+        /// Gets a project setting value. Project settings are org-defined key-value pairs
+        /// that flow through Project → Policy → License inheritance.
+        /// </summary>
+        /// <param name="key">The setting key</param>
+        /// <returns>The setting value or null if not found</returns>
+        public object GetProjectSetting(string key)
         {
-            if (_activeLicense == null || _activeLicense.config == null) return null;
-
-            // Access metadata from config
-            if (!_activeLicense.config.TryGetValue("metadata", out object metadataObj) || metadataObj == null)
-                return null;
-
-            var metadata = metadataObj as Dictionary<string, object>;
-            if (metadata == null) return null;
-
-            if (metadata.TryGetValue(key, out object val)) return val;
-            return null;
+            return _activeLicense?.GetProjectSetting<object>(key, null);
         }
 
         /// <summary>
@@ -1296,34 +1292,25 @@ namespace LTLM.SDK.Unity
 
 
         /// <summary>
-        /// Universal Entitlement Check.
+        /// Gets a list of all enabled feature capabilities.
         /// </summary>
+        /// <param name="_license">Optional license to check, defaults to active license</param>
+        /// <returns>List of feature names that are enabled</returns>
         public List<string> GetEntitledCapabilites(LicenseData _license = null)
         {
             List<string> entitledCapabilities = new List<string>();
 
-            if (_license == null)
+            _license ??= _activeLicense;
+            if (_license?.config?.features == null) return entitledCapabilities;
+
+            foreach (var feature in _license.config.features)
             {
-                if (_activeLicense == null || _activeLicense.config == null) return entitledCapabilities;
-                _license = _activeLicense;
-            }
-
-            // Access features from config
-            if (!_license.config.TryGetValue("features", out object featuresObj) || featuresObj == null)
-                return entitledCapabilities;
-
-            var features = JsonConvert.DeserializeObject<Dictionary<string, string>>(featuresObj.ToString());
-            if (features == null) return entitledCapabilities;
-
-            for (int i = 0; i < features.Count; i++)
-            {
-                if (features.ElementAt(i).Value == null) continue;
-                string sVal = features.ElementAt(i).Value.ToLower();
+                if (string.IsNullOrEmpty(feature.Value)) continue;
+                
+                string sVal = feature.Value.ToLower();
                 if (sVal == "true" || sVal == "1")
                 {
-                    Debug.Log("[LTLM] entitled Capabilites " + features.ElementAt(i).Key + " - " +
-                              features.ElementAt(i).Value);
-                    entitledCapabilities.Add(features.ElementAt(i).Key);
+                    entitledCapabilities.Add(feature.Key);
                 }
             }
 
@@ -1499,6 +1486,28 @@ namespace LTLM.SDK.Unity
                 "/v1/sdk/pro/license/topup-link",
                 request,
                 res => onUrlReceived?.Invoke(res.checkoutUrl),
+                err => onError?.Invoke(err)
+            ));
+        }
+
+        /// <summary>
+        /// Checks if a customer email is eligible for a trial on this project.
+        /// Use before showing trial options to returning customers.
+        /// </summary>
+        /// <param name="email">Customer email to check</param>
+        /// <param name="onSuccess">Called with eligibility result</param>
+        /// <param name="onError">Called on error</param>
+        public void CheckTrialEligibility(string email, Action<TrialEligibilityResult> onSuccess, Action<string> onError = null)
+        {
+            if (string.IsNullOrEmpty(email))
+            {
+                onError?.Invoke("Email is required for trial eligibility check.");
+                return;
+            }
+
+            StartCoroutine(_client.GetEncrypted<TrialEligibilityResult>(
+                $"/v1/sdk/pro/project/trial-eligibility?email={UnityWebRequest.EscapeURL(email)}",
+                res => onSuccess?.Invoke(res),
                 err => onError?.Invoke(err)
             ));
         }

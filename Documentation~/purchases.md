@@ -15,6 +15,44 @@ All purchases open a secure checkout page in the browser.
 
 ---
 
+## Check Trial Eligibility First
+
+Before showing trial options to returning customers, check if they're eligible:
+
+```csharp
+public class PricingUI : MonoBehaviour
+{
+    public GameObject trialButton;
+    public GameObject fullPriceButton;
+
+    void Start()
+    {
+        // Check eligibility before showing pricing
+        LTLMManager.Instance.CheckTrialEligibility(customerEmail,
+            result => {
+                trialButton.SetActive(result.eligible);
+                fullPriceButton.SetActive(true);
+                
+                if (!result.eligible)
+                {
+                    Debug.Log($"Trial not available: {result.message}");
+                }
+            },
+            error => {
+                // On error, show full price only
+                trialButton.SetActive(false);
+                fullPriceButton.SetActive(true);
+            }
+        );
+    }
+}
+```
+
+> [!TIP]
+> Always check trial eligibility when you have the customer's email (e.g., after OTP login) to prevent showing trial options to customers who have already used their trial.
+
+---
+
 ## Get Available Products
 
 Fetch purchasable plans:

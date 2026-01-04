@@ -647,6 +647,51 @@ if (topupOptions != null && license.policy.config.customerActions.canBuyTopUps)
 
 ---
 
+### CheckTrialEligibility
+
+Checks if a customer email is eligible for a trial on this project. Use before showing trial options to returning customers.
+
+```csharp
+LTLMManager.Instance.CheckTrialEligibility(
+    email,           // string: Customer email to check
+    onSuccess,       // Action<TrialEligibilityResult>: Result callback
+    onError          // Action<string>: Error callback
+);
+```
+
+**Example:**
+```csharp
+// Before showing trial offer
+LTLMManager.Instance.CheckTrialEligibility("customer@example.com",
+    result => {
+        if (result.eligible)
+        {
+            ShowTrialButton();
+        }
+        else
+        {
+            // Show full price, hide trial option
+            Debug.Log($"Trial not available: {result.message}");
+            HideTrialButton();
+        }
+    },
+    error => Debug.LogError(error)
+);
+```
+
+**Result Properties:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `eligible` | bool | Whether trial is available |
+| `reason` | string | Reason code if not eligible (e.g., `previous_trial`, `duplicate_card`) |
+| `message` | string | User-facing message |
+
+> [!TIP]
+> Check trial eligibility before showing pricing UI to avoid showing trial options to customers who have already used their trial.
+
+---
+
 ## Customer Authentication (OTP)
 
 ### RequestLoginOTP

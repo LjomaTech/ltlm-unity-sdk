@@ -69,8 +69,36 @@ namespace LTLM.SDK.Core.Models
         public PolicyData policy;
         public CustomerData customer;
         
-        // Resolved config (access config["features"], config["metadata"] for custom data)
-        public Dictionary<string, object> config;
+        /// <summary>
+        /// Resolved configuration with overrides applied (Policy + Project + License).
+        /// Access limits, features, capabilities, projectSettings, enforcement settings.
+        /// </summary>
+        public LicenseConfig config;
+        
+        /// <summary>
+        /// Custom org-defined settings merged in order: Project (base) → Policy → License.
+        /// These are arbitrary key-value pairs defined by the organization for their own use
+        /// (e.g., API endpoints, feature flags, environment URLs).
+        /// </summary>
+        public Dictionary<string, object> ProjectSettings => config?.projectSettings ?? new Dictionary<string, object>();
+        
+        /// <summary>
+        /// Gets a specific project setting value with type conversion.
+        /// </summary>
+        public T GetProjectSetting<T>(string key, T defaultValue = default)
+        {
+            var settings = ProjectSettings;
+            if (settings != null && settings.TryGetValue(key, out var value))
+            {
+                try
+                {
+                    if (value is T typed) return typed;
+                    return (T)Convert.ChangeType(value, typeof(T));
+                }
+                catch { }
+            }
+            return defaultValue;
+        }
         
         // User-defined settings (synced across devices)
         public Dictionary<string, object> userSettings;
@@ -137,9 +165,85 @@ namespace LTLM.SDK.Core.Models
         public float? recurringPrice;
 
         public bool isAirGapped;
+        public string environment;
         
-        public PolicyConfig config; // Policy config for limits display
+        // Policy config - includes limits, features, etc. for store/marketplace display
+        // Note: This is ONLY populated by buyable-policies endpoint, NOT by license validation
+        // (license validation uses LicenseData.config for resolved settings)
+        public PolicyConfig config;
+        
+        // Top-up options (policy-level only, not overrideable per license)
+        public List<TopUpOption> topUpOptions;
     }
+
+    #region License Config (Resolved/Overrideable Settings)
+    
+    /// <summary>
+    /// Resolved license configuration with all overrides applied.
+    /// Contains only overrideable items (not full policy config to avoid duplication).
+    /// </summary>
+    [Serializable]
+    public class LicenseConfig
+    {
+        public PolicyLimits limits;
+        public Dictionary<string, string> features;
+        public List<string> capabilities;
+        public Dictionary<string, object> projectSettings;
+        public PolicyVersioning versioning;
+        public GeofencingConfig geofencing;
+        public SDKEnforcementConfig sdkEnforcement;
+        public LicenseCustomerActions customerActions;
+    }
+
+    /// <summary>
+    /// SDK enforcement settings (overrideable per license).
+    /// </summary>
+    [Serializable]
+    public class SDKEnforcementConfig
+    {
+        public HeartbeatConfig heartbeat;
+        public OfflineGracePeriodConfig offlineGracePeriod;
+        public string mode; // standard, pro_only
+    }
+
+    [Serializable]
+    public class HeartbeatConfig
+    {
+        public int interval; // in minutes
+        public bool enabled;
+    }
+
+    [Serializable]
+    public class OfflineGracePeriodConfig
+    {
+        public bool enabled;
+        public int duration; // in hours
+    }
+
+    /// <summary>
+    /// Geofencing configuration (region restrictions).
+    /// </summary>
+    [Serializable]
+    public class GeofencingConfig
+    {
+        public bool enabled;
+        public List<string> allowedCountries;
+        public List<string> blockedCountries;
+    }
+
+    /// <summary>
+    /// Customer actions configuration (without topUpOptions which are policy-level).
+    /// </summary>
+    [Serializable]
+    public class LicenseCustomerActions
+    {
+        public bool allowHardwareRelease;
+        public bool allowRemoteSeatRelease;
+        public bool canBuyTopUps;
+        // Note: topUpOptions are in PolicyData.topUpOptions (policy-level only)
+    }
+    
+    #endregion
 
     [Serializable]
     public class PolicyConfig
@@ -444,4 +548,26 @@ namespace LTLM.SDK.Core.Models
     }
     
     #endregion
+
+    #region Trial Eligibility
+    
+    /// <summary>
+    /// Result of a trial eligibility check.
+    /// Use CheckTrialEligibility to verify before showing trial options.
+    /// </summary>
+    [Serializable]
+    public class TrialEligibilityResult
+    {
+        /// <summary>Whether the customer is eligible for a trial.</summary>
+        public bool eligible;
+        
+        /// <summary>Reason code if not eligible ("previous_trial", "duplicate_card", etc.).</summary>
+        public string reason;
+        
+        /// <summary>User-facing message explaining eligibility status.</summary>
+        public string message;
+    }
+    
+    #endregion
 }
+

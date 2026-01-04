@@ -95,29 +95,26 @@ namespace LTLM.SDK.Demos
         }
 
         /// <summary>
-        /// Load feature settings from license config (settings override).
+        /// Load feature settings from license config (projectSettings).
+        /// projectSettings are custom org-defined key-value pairs that flow through
+        /// Project → Policy → License inheritance.
         /// </summary>
         private void LoadSettingsOverride()
         {
             var license = LTLMManager.Instance.ActiveLicense;
-            if (license?.config == null) return;
+            if (license == null) return;
 
-            // Example: Load custom export costs from license config
-            if (license.config.ContainsKey("featureCosts"))
-            {
-                var costs = license.config["featureCosts"] as Dictionary<string, object>;
-                if (costs != null)
-                {
-                    if (costs.ContainsKey("basic"))
-                        basicExportCost = System.Convert.ToInt32(costs["basic"]);
-                    if (costs.ContainsKey("pro"))
-                        proExportCost = System.Convert.ToInt32(costs["pro"]);
-                    if (costs.ContainsKey("enterprise"))
-                        enterpriseExportCost = System.Convert.ToInt32(costs["enterprise"]);
+            // Load custom export costs from projectSettings
+            // These can be defined in Project, Policy, or License level overrides
+            var basicCost = license.GetProjectSetting<int>("basicExportCost", 0);
+            var proCost = license.GetProjectSetting<int>("proExportCost", 0);
+            var enterpriseCost = license.GetProjectSetting<int>("enterpriseExportCost", 0);
 
-                    Debug.Log($"[Demo] Loaded feature costs from config");
-                }
-            }
+            if (basicCost > 0) basicExportCost = basicCost;
+            if (proCost > 0) proExportCost = proCost;
+            if (enterpriseCost > 0) enterpriseExportCost = enterpriseCost;
+
+            Debug.Log($"[Demo] Feature costs: basic={basicExportCost}, pro={proExportCost}, enterprise={enterpriseExportCost}");
         }
 
         /// <summary>

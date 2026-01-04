@@ -25,16 +25,20 @@ public class LicenseCard : MonoBehaviour
         var licenseKey = licenseData.licenseKey;
         licenseKey = licenseKey.Replace(licenseKey.Substring(4, 12), "xxxxxxxxxx");
         Key.text = licenseKey;
-        PolicyName.text = licenseData.policy.name;
+        PolicyName.text = licenseData.policy?.name ?? "Unknown Policy";
 
-        if (licenseData.policy.config.limits.tokens.enabled)
+        // Use licenseData.config (resolved config) instead of policy.config
+        var config = licenseData.config;
+        
+        if (config?.limits?.tokens?.enabled == true)
             TokensUsage.text = "Tokens : " + licenseData.tokensRemaining.ToString() + "/" +
                                licenseData.tokensLimit.ToString();
-        if (licenseData.policy.config.limits.seats.enabled)
+        
+        if (config?.limits?.seats?.enabled == true)
             ActiveSeats.text = "Active Seats: " +
                                ((licenseData.activeSeats != null) ? licenseData.activeSeats.ToString() : "0") +
                                "/" +
-                               licenseData.policy.config.limits.seats.maxSeats.ToString();
+                               (config.limits.seats.maxSeats > 0 ? config.limits.seats.maxSeats.ToString() : "1");
 
         var CapabilitesList = LTLMManager.Instance.GetEntitledCapabilites(licenseData);
         var CapabilitesString = "Capabilites : ";
@@ -50,13 +54,14 @@ public class LicenseCard : MonoBehaviour
 
         Capabilites.text = CapabilitesString.ToString();
 
-        if (licenseData.policy.type == "perpetual")
+        if (licenseData.policy?.type == "perpetual")
             ExpireDate.text = "perpetual";
         else
         {
-            if (licenseData.policy.type == "usage-based")
+            if (licenseData.policy?.type == "usage-based")
             {
-                if (licenseData.policy.config.limits.time.mode == "duration")
+                // Use config.limits.time instead of policy.config.limits.time
+                if (config?.limits?.time?.mode == "duration")
                 {
                     ExpireDate.text =
                         "Expire At : " + DateTime.Parse(licenseData.validUntil).ToString("dd-MM-yyyy");

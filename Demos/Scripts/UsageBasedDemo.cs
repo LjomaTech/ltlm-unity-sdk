@@ -77,40 +77,32 @@ namespace LTLM.SDK.Demos
         }
 
         /// <summary>
-        /// Load settings override from license config.
-        /// The config comes from the policy or license-specific overrides set in the dashboard.
+        /// Load settings override from license config (projectSettings).
+        /// projectSettings are custom org-defined key-value pairs that flow through
+        /// Project → Policy → License inheritance.
         /// </summary>
         private void LoadSettingsOverride()
         {
             var license = LTLMManager.Instance.ActiveLicense;
-            if (license?.config == null) return;
+            if (license == null) return;
 
-            // Example: Override token costs from license config
-            if (license.config.ContainsKey("exportCosts"))
+            // Load custom export costs from projectSettings
+            // These can be defined in Project, Policy, or License level overrides
+            var lowCost = license.GetProjectSetting<int>("lowResCost", 0);
+            var highCost = license.GetProjectSetting<int>("highResCost", 0);
+            var fourKCost = license.GetProjectSetting<int>("cost4K", 0);
+
+            if (lowCost > 0) lowResCost = lowCost;
+            if (highCost > 0) highResCost = highCost;
+            if (fourKCost > 0) cost4K = fourKCost;
+
+            Debug.Log($"[Demo] Export costs: Low={lowResCost}, High={highResCost}, 4K={cost4K}");
+
+            // Example: Check for custom welcome message
+            var welcomeMessage = license.GetProjectSetting<string>("welcomeMessage", null);
+            if (!string.IsNullOrEmpty(welcomeMessage))
             {
-                var costs = license.config["exportCosts"] as Dictionary<string, object>;
-                if (costs != null)
-                {
-                    if (costs.ContainsKey("low"))
-                        lowResCost = System.Convert.ToInt32(costs["low"]);
-                    if (costs.ContainsKey("high"))
-                        highResCost = System.Convert.ToInt32(costs["high"]);
-                    if (costs.ContainsKey("4k"))
-                        cost4K = System.Convert.ToInt32(costs["4k"]);
-
-                    Debug.Log($"[Demo] Loaded custom costs: Low={lowResCost}, High={highResCost}, 4K={cost4K}");
-                }
-            }
-
-            // Example: Check for custom metadata (now inside config)
-            if (license.config.ContainsKey("metadata"))
-            {
-                var metadata = license.config["metadata"] as Dictionary<string, object>;
-                if (metadata != null && metadata.ContainsKey("welcomeMessage"))
-                {
-                    string welcome = metadata["welcomeMessage"].ToString();
-                    Debug.Log("[Demo] Welcome message: " + welcome);
-                }
+                Debug.Log("[Demo] Welcome message: " + welcomeMessage);
             }
         }
 
