@@ -50,8 +50,6 @@ Understanding license activation, validation, and enforcement.
 | `ConnectionRequired` | Offline grace exceeded | Block until online |
 | `Suspended` | Admin suspended | Show contact support |
 | `Revoked` | Permanently revoked | Block access |
-| `Tampered` | Security violation | Block + alert |
-
 ---
 
 ## Activation Flow

@@ -608,8 +608,8 @@ namespace LTLM.SDK.Unity
                 _ =>
                 {
                     Debug.Log("[LTLM] Seat released successfully.");
-                    OnSeatStatusChanged?.Invoke("RELEASED", _activeLicense.activeSeats ?? 0,
-                        _activeLicense.maxConcurrentSeats ?? 0);
+                    OnSeatStatusChanged?.Invoke("RELEASED", _activeLicense?.activeSeats ?? 0,
+                        _activeLicense?.maxConcurrentSeats ?? 0);
                 },
                 _ => { },
                 skipNonce: true

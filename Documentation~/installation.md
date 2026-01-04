@@ -16,13 +16,18 @@ Detailed instructions for installing the LTLM Unity SDK.
 
 ## Installation Methods
 
-### Method 1: Unity Package (Recommended)
 
-1. Download `LTLM.unitypackage` from the [releases page](#)
-2. Open your Unity project
-3. Go to **Assets → Import Package → Custom Package**
-4. Select the downloaded package
-5. Click **Import All**
+### Method 1: Unity Package Manager (UPM)
+
+Add to your `manifest.json`:
+
+```json
+{
+  "dependencies": {
+    "com.ltlm.sdk": "https://github.com/LjomaTech/ltlm-unity-sdk.git"
+  }
+}
+```
 
 ### Method 2: Manual Installation
 
@@ -30,17 +35,6 @@ Detailed instructions for installing the LTLM Unity SDK.
 2. Copy the `Assets/LTLM` folder to your project's `Assets` folder
 3. Ensure dependencies are present (see below)
 
-### Method 3: Unity Package Manager (UPM)
-
-Add to your `manifest.json`:
-
-```json
-{
-  "dependencies": {
-    "com.ltlm.sdk": "https://github.com/ltlm/unity-sdk.git#v1.2.0"
-  }
-}
-```
 
 ---
 

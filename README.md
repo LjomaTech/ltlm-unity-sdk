@@ -11,6 +11,7 @@ To install the SDK, open the **Package Manager** in Unity (`Window` > `Package M
 
 `https://github.com/LjomaTech/ltlm-unity-sdk.git`
 
+
 ```csharp
 using LTLM.SDK.Unity;
 
@@ -26,7 +27,7 @@ See the full documentation in the [Documentation~](Documentation~/) folder.
 
 ## Support
 
-- 📧 Email: support@ltlm.io
+- 📧 Email: support@ljomatech.com
 - 🌐 Dashboard: [ltlm.ljomatech.com](https://ltlm.ljomatech.com)
 
 ## License

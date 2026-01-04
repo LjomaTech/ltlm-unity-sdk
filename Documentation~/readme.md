@@ -52,10 +52,9 @@ Complete documentation for integrating license management into your Unity applic
 
 ## Quick Links
 
-- **Dashboard**: [dashboard.ltlm.io](https://dashboard.ltlm.io)
-- **API Status**: [status.ltlm.io](https://status.ltlm.io)
-- **Support**: [support@ltlm.io](mailto:support@ltlm.io)
-- **UI Toolkit**: [LTLM UI Package](https://github.com/ljomatech/ltlm-unity-ui) (optional drop-in UI)
+- **Dashboard**: [ltlm.ljomatech.com](https://ltlm.ljomatech.com)
+- **Support**: [support@ljomatech.com](mailto:support@ljomatech.com)
+- **UI Toolkit**: [LTLM UI Package](https://github.com/LjomaTech/ltlm-unity-sdk-ui-toolkit) (optional drop-in UI)
 
 ---
 
