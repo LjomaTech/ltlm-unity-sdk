@@ -137,7 +137,6 @@ namespace LTLM.SDK.Core.Models
         public float? recurringPrice;
 
         public bool isAirGapped;
-        public string environment;
         
         public PolicyConfig config; // Policy config for limits display
     }
@@ -145,22 +144,22 @@ namespace LTLM.SDK.Core.Models
     [Serializable]
     public class PolicyConfig
     {
+        public string environment;
         public PolicyLimits limits;
         public PolicyCustomerActions customerActions;
-        public PolicySdkEnforcement sdkEnforcement;
         public PolicyMetadata metadata;
+        public PolicyVersioning versioning;
         public PolicyVisibility visibility;
+        public Dictionary<string, string> features;
     }
 
     [Serializable]
     public class PolicyLimits
     {
-        public int maxMachines;
-        public int maxActivations;
-        public bool allowOffline;
         public PolicyTimeLimit time;
         public PolicySeatsLimit seats;
-        public PolicyActivationsLimit activations;
+        public PolicyTokenLimit tokens;
+        public PolicyActivationsLimit devices;
     }
 
     [Serializable]
@@ -169,8 +168,6 @@ namespace LTLM.SDK.Core.Models
         public string mode; // duration, absolute, relative
         public int durationDays;
         public int gracePeriodDays;
-        public string value; // for relative
-        public string unit;  // for relative
     }
 
     [Serializable]
@@ -178,21 +175,27 @@ namespace LTLM.SDK.Core.Models
     {
         public bool enabled;
         public int maxSeats;
-        public string mode;
+    }
+    
+    [Serializable]
+    public class PolicyTokenLimit
+    {
+        public bool enabled;
+        public int maxTokens;
     }
 
     [Serializable]
     public class PolicyActivationsLimit
     {
-        public bool enabled;
-        public int maxTotal;
+        public bool hwidReqiured;
+        public int maxDevices;
     }
 
     [Serializable]
     public class PolicyCustomerActions
     {
-        public bool canViewLicenses;
-        public bool canReleaseDevice;
+        public bool allowHardwareRelease;
+        public bool allowRemoteSeatRelease;
         public bool canBuyTopUps;
         public List<TopUpOption> topUpOptions;
     }
@@ -201,8 +204,12 @@ namespace LTLM.SDK.Core.Models
     public class TopUpOption
     {
         public string packId;
-        public int activations;
-        public string displayName;
+        public int tokens;
+        public int devices;
+        public int seats;
+        public string capability;
+        public string name;
+        public int days;
         public PriceData price;
     }
 
@@ -212,12 +219,13 @@ namespace LTLM.SDK.Core.Models
         public float amount;
         public string currency;
     }
-
+    
     [Serializable]
-    public class PolicySdkEnforcement
+    public class PolicyVersioning
     {
-        public string mode; // heartbeat, validation, strict
-        public int heartbeatIntervalSeconds;
+        public bool enabled;
+        public string maxVersion;
+        public string minVersion;
     }
 
     [Serializable]

@@ -1,0 +1,22 @@
+fileFormatVersion: 2
+guid: da4d5564f11af2d4095624df7868231a
+TrueTypeFontImporter:
+  externalObjects: {}
+  serializedVersion: 4
+  fontSize: 16
+  forceTextureCase: -2
+  characterSpacing: 0
+  characterPadding: 1
+  includeFontData: 1
+  fontNames:
+  - Air Strip Arabic
+  fallbackFontReferences:
+  - {fileID: 12800000, guid: 29c0368307b06664ca2b77304193dd4f, type: 3}
+  customCharacters: 
+  fontRenderingMode: 0
+  ascentCalculationMode: 1
+  useLegacyBoundsCalculation: 0
+  shouldRoundAdvanceValue: 1
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

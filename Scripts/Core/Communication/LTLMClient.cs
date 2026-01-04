@@ -60,6 +60,7 @@ namespace LTLM.SDK.Core.Communication
                     {
                         var response = JsonConvert.DeserializeObject<TResponse>(request.downloadHandler.text);
                         onSuccess?.Invoke(response);
+                        Debug.LogWarning("[LTLM Client] Get Request at " + endpoint + " with data " + request.downloadHandler.text);
                     }
                     catch (Exception ex)
                     {
@@ -220,12 +221,13 @@ namespace LTLM.SDK.Core.Communication
                             _lastNonce = signedResponse.server_nonce;
                             SecureStorage.Save("nonce_" + _projectId, _lastNonce, DeviceID.GetHWID());
                         }
-
+                        Debug.LogWarning("[LTLM Client] Post Request at " + endpoint + " with data " + decryptedBody);
                         onSuccess?.Invoke(signedResponse.data);
                     }
                     catch (Exception ex)
                     {
                         onError?.Invoke("Failed to process response: " + ex.Message);
+                        Debug.Log("[LTLM Client] Failed to process response: " + ex.Message + " - " + ex.StackTrace);
                     }
                 }
             }

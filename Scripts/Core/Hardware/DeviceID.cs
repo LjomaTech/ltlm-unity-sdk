@@ -28,8 +28,8 @@ namespace LTLM.SDK.Core.Hardware
             sb.Append(SystemInfo.systemMemorySize);
 
             // 3. Graphics information (useful but can change with drivers, so use sparingly)
-            sb.Append(SystemInfo.graphicsDeviceName);
-            sb.Append(SystemInfo.graphicsMemorySize);
+            // sb.Append(SystemInfo.graphicsDeviceName);
+            // sb.Append(SystemInfo.graphicsMemorySize);
 
             // 4. Operating System
             sb.Append(SystemInfo.operatingSystem);

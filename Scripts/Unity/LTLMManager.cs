@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using LTLM.SDK.Core;
 using LTLM.SDK.Core.Communication;
@@ -20,24 +21,34 @@ namespace LTLM.SDK.Unity
     {
         /// <summary>No license is currently loaded or validated.</summary>
         Unauthenticated,
+
         /// <summary>License is valid and active.</summary>
         Active,
+
         /// <summary>License is valid but all concurrent seats are occupied.</summary>
         ValidNoSeat,
+
         /// <summary>License has passed its expiration date.</summary>
         Expired,
+
         /// <summary>License is expired but within the configured grace period.</summary>
         GracePeriod,
+
         /// <summary>Offline grace period exceeded; internet connection required.</summary>
         ConnectionRequired,
+
         /// <summary>Clock manipulation or file tampering detected.</summary>
         Tampered,
+
         /// <summary>License has been suspended by administrator.</summary>
         Suspended,
+
         /// <summary>License has been revoked and cannot be used.</summary>
         Revoked,
+
         /// <summary>License has been terminated; application will exit.</summary>
         Terminated,
+
         /// <summary>Session was kicked by another device. Must reactivate to continue.</summary>
         Kicked
     }
@@ -90,20 +101,19 @@ namespace LTLM.SDK.Unity
         [Header("Project Configuration")]
         [Tooltip("Your LTLM Project ID. Obtained from the dashboard or Editor tools.")]
         public string projectId;
-        
+
         [Tooltip("Ed25519 Public Key for signature verification. PEM format.")]
         public string publicKey;
-        
+
         [Tooltip("AES-256 Secret Key for encryption. 64-character hex string. Keep this secret!")]
         public string secretKey;
 
-        [Header("Settings")]
-        [Tooltip("Interval between heartbeat requests in seconds. Default: 300 (5 minutes).")]
+        [Header("Settings")] [Tooltip("Interval between heartbeat requests in seconds. Default: 300 (5 minutes).")]
         public float heartbeatIntervalSeconds = 300f;
-        
+
         [Tooltip("If true, automatically attempts to load and validate a stored license on Start().")]
         public bool autoValidateOnStart = true;
-        
+
         [Tooltip("Your application/software version. If empty, uses Application.version.")]
         public string softwareVersion;
 
@@ -117,13 +127,14 @@ namespace LTLM.SDK.Unity
         /// <summary>
         /// Returns true if the current license is active and valid.
         /// </summary>
-        public bool IsAuthenticated => _activeLicense != null && _activeLicense.status == "active";
-        
+        public bool IsAuthenticated => _activeLicense != null && (_activeLicense.status == "active" ||
+                                                                  _activeLicense.status == "grace_period");
+
         /// <summary>
         /// Returns true if a validation request is currently in progress.
         /// </summary>
         public bool IsValidating => _isValidating;
-        
+
         /// <summary>
         /// The currently loaded license data, or null if not authenticated.
         /// </summary>
@@ -195,6 +206,7 @@ namespace LTLM.SDK.Unity
                 Destroy(gameObject);
                 return;
             }
+
             Instance = this;
             DontDestroyOnLoad(gameObject);
 
@@ -230,10 +242,11 @@ namespace LTLM.SDK.Unity
         /// Uses ValidateLicense to check status without re-registering the HWID.
         /// If nonce desync occurs (from crash/power outage), auto-recovery will handle it.
         /// </summary>
-        public void TryLoadStoredLicense(Action<LicenseData, LicenseStatus> onSuccess = null, Action<string> onError = null)
+        public void TryLoadStoredLicense(Action<LicenseData, LicenseStatus> onSuccess = null,
+            Action<string> onError = null)
         {
             if (_isValidating) return;
-            
+
             string storedKey = SecureStorage.Load("license_key_" + projectId, DeviceID.GetHWID());
             if (!string.IsNullOrEmpty(storedKey))
             {
@@ -250,23 +263,25 @@ namespace LTLM.SDK.Unity
             }
         }
 
-        public void ActivateLicense(string licenseKey, Action<LicenseData, LicenseStatus> onSuccess = null, Action<string> onError = null)
+        public void ActivateLicense(string licenseKey, Action<LicenseData, LicenseStatus> onSuccess = null,
+            Action<string> onError = null, bool DoNotShowLoading = false)
         {
             if (_isValidating) return;
             _isValidating = true;
-            
+
             // Fire event so UI can show loading state
-            OnValidationStarted?.Invoke();
+            if(!DoNotShowLoading)
+                OnValidationStarted?.Invoke();
 
             var request = new ActivationRequest
             {
                 key = licenseKey,
                 hwid = DeviceID.GetHWID(),
                 version = LTLMConstants.Version,
+                nickname = DeviceID.GetDeviceName(),
                 clientVersion = softwareVersion,
                 meta = new Dictionary<string, object>
                 {
-                    { "hostname", DeviceID.GetDeviceName() },
                     { "os", DeviceID.GetOS() }
                 }
             };
@@ -283,18 +298,22 @@ namespace LTLM.SDK.Unity
                     OnLicenseStatusChanged?.Invoke(status);
                     CacheLicense(license);
                     SecureStorage.Save("license_key_" + projectId, licenseKey, DeviceID.GetHWID());
-                    SecureStorage.Save("last_successful_sync_" + projectId, SecureClock.GetEffectiveTime(projectId).Ticks.ToString(), DeviceID.GetHWID());
+                    SecureStorage.Save("last_successful_sync_" + projectId,
+                        SecureClock.GetEffectiveTime(projectId).Ticks.ToString(), DeviceID.GetHWID());
                     ProcessEnforcement(license);
                     ProcessSeatStatus(license);
-                    if (_activeLicense == null) {
+                    if (_activeLicense == null)
+                    {
                         onError?.Invoke("This device is not authorized for this license.");
                         return;
                     }
+
                     StartHeartbeat();
                     onSuccess?.Invoke(license, GetLicenseStatus());
                     SyncPendingConsumptions();
                 },
-                err => {
+                err =>
+                {
                     _isValidating = false;
                     OnValidationCompleted?.Invoke(false, LicenseStatus.Unauthenticated);
                     onError?.Invoke(err);
@@ -302,52 +321,58 @@ namespace LTLM.SDK.Unity
             ));
         }
 
-        public void ValidateLicense(string licenseKey, Action<LicenseData, LicenseStatus> onSuccess = null, Action<string> onError = null)
+        public void ValidateLicense(string licenseKey, Action<LicenseData, LicenseStatus> onSuccess = null,
+            Action<string> onError = null)
         {
             if (_isValidating) return;
             _isValidating = true;
-            
+
             // Fire event so UI can show loading state
             OnValidationStarted?.Invoke();
-            
+
             var request = new ActivationRequest
             {
                 key = licenseKey,
                 hwid = DeviceID.GetHWID(),
                 version = LTLMConstants.Version,
+                nickname = DeviceID.GetDeviceName(),
                 clientVersion = softwareVersion,
                 meta = new Dictionary<string, object>
                 {
-                    { "hostname", DeviceID.GetDeviceName() },
                     { "os", DeviceID.GetOS() }
                 }
             };
- 
+
             StartCoroutine(_client.PostEncrypted<ActivationRequest, LicenseData>(
-                "/v1/sdk/pro/license/status",  
+                "/v1/sdk/pro/license/status",
                 request,
                 license =>
                 {
                     _isValidating = false;
                     _activeLicense = license;
                     var status = GetLicenseStatus();
-                    OnValidationCompleted?.Invoke(true, status);
-                    OnLicenseStatusChanged?.Invoke(status);
                     CacheLicense(license);
-                    SecureStorage.Save("last_successful_sync_" + projectId, SecureClock.GetEffectiveTime(projectId).Ticks.ToString(), DeviceID.GetHWID());
+                    Debug.Log(JsonConvert.SerializeObject(license));
+                    SecureStorage.Save("last_successful_sync_" + projectId,
+                        SecureClock.GetEffectiveTime(projectId).Ticks.ToString(), DeviceID.GetHWID());
                     ProcessEnforcement(license);
                     ProcessSeatStatus(license);
-                    if (_activeLicense == null) {
+                    if (_activeLicense == null)
+                    {
                         onError?.Invoke("This device is not authorized for this license.");
                         return;
                     }
+
                     StartHeartbeat();
                     onSuccess?.Invoke(license, status);
                     SyncPendingConsumptions();
+                    OnValidationCompleted?.Invoke(true, status);
+                    OnLicenseStatusChanged?.Invoke(status);
                 },
-                err => {
+                err =>
+                {
                     _isValidating = false;
-                    Debug.LogWarning("[LTLM] Network Validation Failed. Checking offline grace...");
+                    Debug.LogWarning("[LTLM] Network Validation Failed. Checking offline grace..." + err);
                     if (CheckOfflineGraceTimeout())
                     {
                         var status = GetLicenseStatus();
@@ -366,17 +391,18 @@ namespace LTLM.SDK.Unity
         /// <summary>
         /// Activates a license using an offline .ltlm file blob.
         /// </summary>
-        public void ActivateOffline(string encryptedBlob, Action<LicenseData, LicenseStatus> onSuccess = null, Action<string> onError = null)
+        public void ActivateOffline(string encryptedBlob, Action<LicenseData, LicenseStatus> onSuccess = null,
+            Action<string> onError = null)
         {
             try
             {
                 string decrypted = _client.GetCrypto().Decrypt(encryptedBlob);
-                
+
                 // Parse with Newtonsoft for stable verification
                 var settings = new JsonSerializerSettings { DateParseHandling = DateParseHandling.None };
                 var envelope = JsonConvert.DeserializeObject<Newtonsoft.Json.Linq.JObject>(decrypted, settings);
                 string signature = envelope["signature"]?.ToString();
-                
+
                 if (string.IsNullOrEmpty(signature))
                 {
                     onError?.Invoke("Invalid offline license: missing signature.");
@@ -390,10 +416,11 @@ namespace LTLM.SDK.Unity
                 {
                     var signed = JsonConvert.DeserializeObject<SignedResponse<LicenseData>>(decrypted);
                     var license = signed.data;
-                    
+
                     // Immediate Expiry Check with Monotonic Clock
                     DateTime now = SecureClock.GetEffectiveTime(projectId);
-                    if (!string.IsNullOrEmpty(license.validUntil) && DateTime.TryParse(license.validUntil, out DateTime expiry))
+                    if (!string.IsNullOrEmpty(license.validUntil) &&
+                        DateTime.TryParse(license.validUntil, out DateTime expiry))
                     {
                         bool isPerp = license.policy != null && license.policy.type == "perpetual";
                         if (now > expiry && !isPerp)
@@ -406,10 +433,12 @@ namespace LTLM.SDK.Unity
                     _activeLicense = license;
                     SecureStorage.Save("license_key_" + projectId, _activeLicense.licenseKey, DeviceID.GetHWID());
                     ProcessEnforcement(_activeLicense);
-                    if (_activeLicense == null) {
+                    if (_activeLicense == null)
+                    {
                         onError?.Invoke("This device is not authorized in the offline license blob.");
                         return;
                     }
+
                     onSuccess?.Invoke(_activeLicense, GetLicenseStatus());
                 }
                 else
@@ -445,22 +474,25 @@ namespace LTLM.SDK.Unity
                 yield return _client.PostEncrypted<HeartbeatRequest, LicenseData>(
                     "/v1/sdk/pro/license/heartbeat",
                     request,
-                    license => {
+                    license =>
+                    {
                         _activeLicense = license;
                         CacheLicense(license);
-                        SecureStorage.Save("last_successful_sync_" + projectId, SecureClock.GetEffectiveTime(projectId).Ticks.ToString(), DeviceID.GetHWID());
+                        SecureStorage.Save("last_successful_sync_" + projectId,
+                            SecureClock.GetEffectiveTime(projectId).Ticks.ToString(), DeviceID.GetHWID());
                         ProcessEnforcement(license);
                         ProcessSeatStatus(license);
                         SyncPendingConsumptions();
                     },
-                    err => {
+                    err =>
+                    {
                         Debug.LogWarning("[LTLM] Heartbeat failed: " + err);
-                        
+
                         // Automatic recovery for Nonce Mismatch or Tamper signals
                         if (err.Contains("Nonce Mismatch") || err.Contains("TAMPERED"))
                         {
                             Debug.Log("[LTLM] Security out-of-sync. Triggering re-activation...");
-                            ActivateLicense(_activeLicense.licenseKey);
+                            ActivateLicense(_activeLicense.licenseKey, DoNotShowLoading: true);
                         }
                         else
                         {
@@ -496,9 +528,10 @@ namespace LTLM.SDK.Unity
                 {
                     StartHeartbeat();
                     Debug.Log("[LTLM] Heartbeat resumed (app foregrounded).");
-                    
+
                     // Sync any pending token consumptions that were queued while offline
-                    if (_pendingConsumptions.Count > 0 && Application.internetReachability != NetworkReachability.NotReachable)
+                    if (_pendingConsumptions.Count > 0 &&
+                        Application.internetReachability != NetworkReachability.NotReachable)
                     {
                         Debug.Log($"[LTLM] Syncing {_pendingConsumptions.Count} offline token consumptions...");
                         SyncPendingConsumptions();
@@ -527,7 +560,7 @@ namespace LTLM.SDK.Unity
                 StopCoroutine(_heartbeatRoutine);
                 _heartbeatRoutine = null;
             }
-            
+
             // Clear singleton reference if this instance is being destroyed
             if (Instance == this)
             {
@@ -571,7 +604,12 @@ namespace LTLM.SDK.Unity
             StartCoroutine(_client.PostEncrypted<HeartbeatRequest, LicenseData>(
                 "/v1/sdk/pro/license/heartbeat",
                 request,
-                _ => Debug.Log("[LTLM] Seat released successfully."),
+                _ =>
+                {
+                    Debug.Log("[LTLM] Seat released successfully.");
+                    OnSeatStatusChanged?.Invoke("RELEASED", _activeLicense.activeSeats ?? 0,
+                        _activeLicense.maxConcurrentSeats ?? 0);
+                },
                 _ => { },
                 skipNonce: true
             ));
@@ -597,7 +635,8 @@ namespace LTLM.SDK.Unity
 
             if (_activeLicense.seatsEnabled == false)
             {
-                Debug.LogWarning("[LTLM] Seat management is disabled for this license. GetActiveSeats will fail or return empty.");
+                Debug.LogWarning(
+                    "[LTLM] Seat management is disabled for this license. GetActiveSeats will fail or return empty.");
             }
 
             string hwid = DeviceID.GetHWID();
@@ -617,7 +656,8 @@ namespace LTLM.SDK.Unity
         /// <param name="claimSeat">If true, this device will claim the released seat</param>
         /// <param name="onSuccess">Called on successful release</param>
         /// <param name="onError">Called on error</param>
-        public void ReleaseSeat(string targetHwid, bool claimSeat, Action<ReleaseSeatResponse> onSuccess, Action<string> onError = null)
+        public void ReleaseSeat(string targetHwid, bool claimSeat, Action<ReleaseSeatResponse> onSuccess,
+            Action<string> onError = null)
         {
             if (_activeLicense == null)
             {
@@ -641,13 +681,15 @@ namespace LTLM.SDK.Unity
             StartCoroutine(_client.PostEncrypted<ReleaseSeatRequest, ReleaseSeatResponse>(
                 $"/v1/sdk/license/{_activeLicense.licenseKey}/release-seat",
                 request,
-                response => {
+                response =>
+                {
                     if (response.seatClaimed)
                     {
                         Debug.Log("[LTLM] Seat claimed successfully!");
                         // Re-validate to get updated license state
                         ValidateLicense(_activeLicense.licenseKey);
                     }
+
                     onSuccess?.Invoke(response);
                 },
                 onError
@@ -672,8 +714,9 @@ namespace LTLM.SDK.Unity
             Debug.Log("[LTLM] Attempting seat reactivation...");
 
             // Re-validate the license - this will attempt to claim a seat
-            ValidateLicense(_activeLicense.licenseKey, 
-                (license, status) => {
+            ValidateLicense(_activeLicense.licenseKey,
+                (license, status) =>
+                {
                     if (status == LicenseStatus.Active)
                     {
                         Debug.Log("[LTLM] Seat reactivation successful!");
@@ -695,7 +738,7 @@ namespace LTLM.SDK.Unity
         }
 
         #region User Settings (Cloud Sync)
-        
+
         /// <summary>
         /// Gets user settings from the server (synced across devices).
         /// </summary>
@@ -720,7 +763,8 @@ namespace LTLM.SDK.Unity
             StartCoroutine(_client.PostEncrypted<UserSettingsRequest, UserSettingsResponse>(
                 "/v1/sdk/pro/license/settings/get",
                 request,
-                response => {
+                response =>
+                {
                     Debug.Log("[LTLM] User settings retrieved successfully.");
                     onSuccess?.Invoke(response.settings ?? new Dictionary<string, object>());
                 },
@@ -735,7 +779,8 @@ namespace LTLM.SDK.Unity
         /// <param name="settings">Dictionary of settings to save</param>
         /// <param name="onSuccess">Called on successful save</param>
         /// <param name="onError">Called on error</param>
-        public void SaveUserSettings(Dictionary<string, object> settings, Action onSuccess = null, Action<string> onError = null)
+        public void SaveUserSettings(Dictionary<string, object> settings, Action onSuccess = null,
+            Action<string> onError = null)
         {
             if (_activeLicense == null)
             {
@@ -769,7 +814,8 @@ namespace LTLM.SDK.Unity
             StartCoroutine(_client.PostEncrypted<SaveUserSettingsRequest, UserSettingsResponse>(
                 "/v1/sdk/pro/license/settings/save",
                 request,
-                response => {
+                response =>
+                {
                     Debug.Log("[LTLM] User settings saved successfully.");
                     // Update local cache
                     if (_activeLicense != null)
@@ -777,6 +823,7 @@ namespace LTLM.SDK.Unity
                         _activeLicense.userSettings = settings;
                         CacheLicense(_activeLicense);
                     }
+
                     onSuccess?.Invoke();
                 },
                 onError
@@ -805,23 +852,25 @@ namespace LTLM.SDK.Unity
             // Check if we were kicked - handle this FIRST before seat status
             if (license.status == "KICKED" || license.seatStatus == "KICKED" || license.kickedNotice != null)
             {
-                string kickedBy = license.kickedNotice?.kickedByNickname ?? license.kickedNotice?.kickedBy ?? "another device";
-                Debug.LogWarning($"[LTLM] KICKED: Your session was terminated by {kickedBy}. You must reactivate to continue.");
-                
+                string kickedBy = license.kickedNotice?.kickedByNickname ??
+                                  license.kickedNotice?.kickedBy ?? "another device";
+                Debug.LogWarning(
+                    $"[LTLM] KICKED: Your session was terminated by {kickedBy}. You must reactivate to continue.");
+
                 // Stop heartbeat - don't keep trying to auto-register
                 if (_heartbeatRoutine != null)
                 {
                     StopCoroutine(_heartbeatRoutine);
                     _heartbeatRoutine = null;
                 }
-                
+
                 // Fire events
                 OnSeatStatusChanged?.Invoke("KICKED", license.activeSeats ?? 0, license.maxConcurrentSeats ?? 0);
                 if (license.kickedNotice != null)
                 {
                     OnKicked?.Invoke(license.kickedNotice);
                 }
-                
+
                 // Fire validation event as invalid (forces UI to show reactivation prompt)
                 OnValidationCompleted?.Invoke(false, LicenseStatus.Kicked);
                 OnLicenseStatusChanged?.Invoke(LicenseStatus.Kicked);
@@ -832,7 +881,7 @@ namespace LTLM.SDK.Unity
             if (license.status == "VALID_NO_SEAT" || license.seatStatus == "NO_SEAT")
             {
                 Debug.LogWarning("[LTLM] VALID_NO_SEAT: License is valid but no seat is available.");
-                
+
                 // Fire events to notify UI of seat loss
                 OnSeatStatusChanged?.Invoke("NO_SEAT", license.activeSeats ?? 0, license.maxConcurrentSeats ?? 0);
                 OnValidationCompleted?.Invoke(true, LicenseStatus.ValidNoSeat);
@@ -848,7 +897,7 @@ namespace LTLM.SDK.Unity
                     license.activeSeats ?? 0,
                     license.maxConcurrentSeats ?? 0
                 );
-                
+
                 // If status is OCCUPIED (has seat), fire active status
                 if (license.seatStatus == "OCCUPIED")
                 {
@@ -887,7 +936,7 @@ namespace LTLM.SDK.Unity
                 };
 
                 Debug.Log("[LTLM] Attempting seat release on quit...");
-                
+
                 // Fire-and-forget: start request but it may not complete before app terminates
                 StartCoroutine(_client.PostEncrypted<HeartbeatRequest, LicenseData>(
                     "/v1/sdk/pro/license/heartbeat",
@@ -947,8 +996,9 @@ namespace LTLM.SDK.Unity
             if (offlineDuration.TotalHours > graceHours)
             {
                 Debug.LogError($"[LTLM] OFFLINE GRACE PERIOD EXCEEDED ({graceHours} hours). Connection required.");
-                LogEvent("OfflineGraceExceeded", new Dictionary<string, object> { { "duration_hours", offlineDuration.TotalHours } });
-                
+                LogEvent("OfflineGraceExceeded",
+                    new Dictionary<string, object> { { "duration_hours", offlineDuration.TotalHours } });
+
                 // Lockdown the SDK
                 _activeLicense.status = "connection_required";
                 ProcessEnforcement(_activeLicense);
@@ -957,7 +1007,8 @@ namespace LTLM.SDK.Unity
             }
             else
             {
-                Debug.LogWarning($"[LTLM] Running in offline grace mode. {graceHours - offlineDuration.TotalHours:F1} hours remaining.");
+                Debug.LogWarning(
+                    $"[LTLM] Running in offline grace mode. {graceHours - offlineDuration.TotalHours:F1} hours remaining.");
                 // Fire GracePeriod status so UI knows we're in grace mode
                 OnLicenseStatusChanged?.Invoke(LicenseStatus.GracePeriod);
                 return true;
@@ -966,24 +1017,54 @@ namespace LTLM.SDK.Unity
 
         private void CacheLicense(LicenseData license)
         {
-            try {
+            try
+            {
                 string json = JsonConvert.SerializeObject(license);
                 SecureStorage.Save("license_cache_" + projectId, json, DeviceID.GetHWID());
-                SecureStorage.Save("cached_tokens_" + projectId, (license.tokensRemaining ?? 0).ToString(), DeviceID.GetHWID());
-            } catch (Exception e) {
+                SecureStorage.Save("cached_tokens_" + projectId, (license.tokensRemaining ?? 0).ToString(),
+                    DeviceID.GetHWID());
+            }
+            catch (Exception e)
+            {
                 Debug.LogError("[LTLM] Failed to cache license: " + e.Message);
             }
         }
 
         private LicenseData LoadLicenseFromCache()
         {
-            try {
+            try
+            {
                 string json = SecureStorage.Load("license_cache_" + projectId, DeviceID.GetHWID());
                 if (string.IsNullOrEmpty(json)) return null;
                 return JsonConvert.DeserializeObject<LicenseData>(json);
-            } catch {
+            }
+            catch
+            {
                 return null;
             }
+        }
+
+        public void RequestOTP(string email, Action onSuccess, Action<string> onError)
+        {
+            var data = new { email = email };
+            LTLMManager.Instance.StartCoroutine(_client.PostEncrypted<object, object>(
+                "/v1/sdk/pro/auth/customer-login-request",
+                data,
+                res => onSuccess?.Invoke(),
+                err => onError?.Invoke(err)
+            ));
+        }
+
+        public void VerifyOTP(string email, string otp, Action<List<LicenseData>> onPortfolioReceived,
+            Action<string> onError)
+        {
+            var data = new { email = email, otp = otp };
+            LTLMManager.Instance.StartCoroutine(_client.PostEncrypted<object, PortfolioResponse>(
+                "/v1/sdk/pro/auth/customer-portfolio",
+                data,
+                portfolio => { onPortfolioReceived?.Invoke(portfolio.licenses); },
+                err => onError?.Invoke(err)
+            ));
         }
 
         private void ProcessEnforcement(LicenseData license)
@@ -997,9 +1078,10 @@ namespace LTLM.SDK.Unity
                 float serverInterval = license.heartbeatIntervalSeconds.Value;
                 if (Mathf.Abs(heartbeatIntervalSeconds - serverInterval) > 0.1f)
                 {
-                    Debug.Log($"[LTLM] Server forced heartbeat interval change: {heartbeatIntervalSeconds}s -> {serverInterval}s");
+                    Debug.Log(
+                        $"[LTLM] Server forced heartbeat interval change: {heartbeatIntervalSeconds}s -> {serverInterval}s");
                     heartbeatIntervalSeconds = serverInterval;
-                    
+
                     // Restart heartbeat routine to apply the new interval immediately
                     if (_heartbeatRoutine != null)
                     {
@@ -1010,14 +1092,15 @@ namespace LTLM.SDK.Unity
             }
 
             // 2. Feature Enforcement (Hard-blocking or warning based on license capabilities)
-            
+
             // Token Enforcement
             if (license.tokensEnabled == false)
             {
                 // If developer tries to consume tokens but they are disabled
                 if (_pendingConsumptions.Count > 0)
                 {
-                    Debug.LogError("[LTLM] ENFORCEMENT ERROR: Application is attempting to use tokens, but Token Consumption is DISABLED for this license. Please check your policy settings in the LTLM Portal.");
+                    Debug.LogError(
+                        "[LTLM] ENFORCEMENT ERROR: Application is attempting to use tokens, but Token Consumption is DISABLED for this license. Please check your policy settings in the LTLM Portal.");
                 }
             }
 
@@ -1027,7 +1110,8 @@ namespace LTLM.SDK.Unity
                 // If seats are disabled but status is VALID_NO_SEAT, something is wrong on server or local state
                 if (license.status == "VALID_NO_SEAT")
                 {
-                    Debug.LogError("[LTLM] ENFORCEMENT ERROR: License status is VALID_NO_SEAT but Seats are DISABLED. This license does not support concurrent seats.");
+                    Debug.LogError(
+                        "[LTLM] ENFORCEMENT ERROR: License status is VALID_NO_SEAT but Seats are DISABLED. This license does not support concurrent seats.");
                 }
             }
 
@@ -1036,7 +1120,8 @@ namespace LTLM.SDK.Unity
             {
                 if (Application.internetReachability == NetworkReachability.NotReachable)
                 {
-                    Debug.LogError("[LTLM] ENFORCEMENT ERROR: Offline mode is DISABLED for this license. An active internet connection is required to continue using this software.");
+                    Debug.LogError(
+                        "[LTLM] ENFORCEMENT ERROR: Offline mode is DISABLED for this license. An active internet connection is required to continue using this software.");
                     // In a production app, you would fire an event here to show a "Please Connect" overlay
                 }
             }
@@ -1044,7 +1129,7 @@ namespace LTLM.SDK.Unity
             // 3. HWID Check: Verify if this device is still registered to the license
             string currentHwid = DeviceID.GetHWID();
             bool isDeviceAuthorized = false;
-            
+
             if (license.machines != null)
             {
                 foreach (var machine in license.machines)
@@ -1059,7 +1144,8 @@ namespace LTLM.SDK.Unity
 
             if (!isDeviceAuthorized)
             {
-                Debug.LogError("[LTLM] Device Authorization Failed: This hardware ID is not registered with the current license. De-activating...");
+                Debug.LogError(
+                    "[LTLM] Device Authorization Failed: This hardware ID is not registered with the current license. De-activating...");
                 ClearLicenseCache();
                 return;
             }
@@ -1079,10 +1165,11 @@ namespace LTLM.SDK.Unity
                 Debug.LogError("[LTLM] HEARTBEAT TIMEOUT. INTERNET CONNECTION REQUIRED TO CONTINUE.");
                 return;
             }
-            
+
             if (SecureClock.IsClockTampered(projectId))
             {
-                Debug.LogError("[LTLM] CLOCK TAMPERING DETECTED. Access to features is restricted until the system clock is corrected.");
+                Debug.LogError(
+                    "[LTLM] CLOCK TAMPERING DETECTED. Access to features is restricted until the system clock is corrected.");
             }
 
             DateTime now = SecureClock.GetEffectiveTime(projectId);
@@ -1146,31 +1233,35 @@ namespace LTLM.SDK.Unity
         public bool HasCapability(string featureName)
         {
             if (_activeLicense == null || _activeLicense.config == null) return false;
-            
+
             // Access features from config
-            if (!_activeLicense.config.TryGetValue("features", out object featuresObj) || featuresObj == null) return false;
-            
-            var features = featuresObj as Dictionary<string, object>;
+            if (!_activeLicense.config.TryGetValue("features", out object featuresObj) || featuresObj == null)
+                return false;
+
+            var features = JsonConvert.DeserializeObject<Dictionary<string, string>>(featuresObj.ToString());
             if (features == null) return false;
-            
-            if (features.TryGetValue(featureName, out object val)) {
+
+            if (features.TryGetValue(featureName, out string val))
+            {
                 if (val == null) return false;
                 string sVal = val.ToString().ToLower();
                 return sVal == "true" || sVal == "1";
             }
+
             return false;
         }
 
         public object GetMetadata(string key)
         {
             if (_activeLicense == null || _activeLicense.config == null) return null;
-            
+
             // Access metadata from config
-            if (!_activeLicense.config.TryGetValue("metadata", out object metadataObj) || metadataObj == null) return null;
-            
+            if (!_activeLicense.config.TryGetValue("metadata", out object metadataObj) || metadataObj == null)
+                return null;
+
             var metadata = metadataObj as Dictionary<string, object>;
             if (metadata == null) return null;
-            
+
             if (metadata.TryGetValue(key, out object val)) return val;
             return null;
         }
@@ -1181,14 +1272,14 @@ namespace LTLM.SDK.Unity
         public bool IsEntitled(string capability = null, int requiredTokens = 0)
         {
             var status = GetLicenseStatus();
-            
+
             // Entitlements are only available for Active or GracePeriod licenses
-            if (status != LicenseStatus.Active && status != LicenseStatus.GracePeriod) 
+            if (status != LicenseStatus.Active && status != LicenseStatus.GracePeriod)
                 return false;
-            
+
             if (_activeLicense == null) return false;
 
-            // Check specific capability if provided
+            // Check specific capability if provided 
             if (!string.IsNullOrEmpty(capability))
             {
                 if (!HasCapability(capability)) return false;
@@ -1203,6 +1294,43 @@ namespace LTLM.SDK.Unity
             return true;
         }
 
+
+        /// <summary>
+        /// Universal Entitlement Check.
+        /// </summary>
+        public List<string> GetEntitledCapabilites(LicenseData _license = null)
+        {
+            List<string> entitledCapabilities = new List<string>();
+
+            if (_license == null)
+            {
+                if (_activeLicense == null || _activeLicense.config == null) return entitledCapabilities;
+                _license = _activeLicense;
+            }
+
+            // Access features from config
+            if (!_license.config.TryGetValue("features", out object featuresObj) || featuresObj == null)
+                return entitledCapabilities;
+
+            var features = JsonConvert.DeserializeObject<Dictionary<string, string>>(featuresObj.ToString());
+            if (features == null) return entitledCapabilities;
+
+            for (int i = 0; i < features.Count; i++)
+            {
+                if (features.ElementAt(i).Value == null) continue;
+                string sVal = features.ElementAt(i).Value.ToLower();
+                if (sVal == "true" || sVal == "1")
+                {
+                    Debug.Log("[LTLM] entitled Capabilites " + features.ElementAt(i).Key + " - " +
+                              features.ElementAt(i).Value);
+                    entitledCapabilities.Add(features.ElementAt(i).Key);
+                }
+            }
+
+            return entitledCapabilities;
+        }
+
+
         /// <summary>
         /// Gets the resolved status of the current license.
         /// </summary>
@@ -1214,8 +1342,10 @@ namespace LTLM.SDK.Unity
             if (SecureClock.IsClockTampered(projectId)) return LicenseStatus.Tampered;
 
             // 2. Integrity Checks (File Deletion/Modification)
-            if (SecureStorage.Load("license_key_" + projectId, DeviceID.GetHWID(), projectId) == "TAMPERED") return LicenseStatus.Tampered;
-            if (SecureStorage.Load("cached_tokens_" + projectId, DeviceID.GetHWID(), projectId) == "TAMPERED") return LicenseStatus.Tampered;
+            if (SecureStorage.Load("license_key_" + projectId, DeviceID.GetHWID(), projectId) == "TAMPERED")
+                return LicenseStatus.Tampered;
+            if (SecureStorage.Load("cached_tokens_" + projectId, DeviceID.GetHWID(), projectId) == "TAMPERED")
+                return LicenseStatus.Tampered;
 
             // 3. Map Backend Statuses
             switch (_activeLicense.status?.ToLower())
@@ -1240,10 +1370,10 @@ namespace LTLM.SDK.Unity
         public int GetTokenBalance()
         {
             if (_activeLicense != null) return _activeLicense.tokensRemaining ?? 0;
-            
+
             string cached = SecureStorage.Load("cached_tokens_" + projectId, DeviceID.GetHWID());
             if (int.TryParse(cached, out int tokens)) return tokens;
-            
+
             return 0;
         }
 
@@ -1253,7 +1383,8 @@ namespace LTLM.SDK.Unity
         /// </summary>
         public int GetDaysRemaining()
         {
-            bool isPerp = _activeLicense != null && _activeLicense.policy != null && _activeLicense.policy.type == "perpetual";
+            bool isPerp = _activeLicense != null && _activeLicense.policy != null &&
+                          _activeLicense.policy.type == "perpetual";
             if (_activeLicense == null || isPerp) return -1;
             if (string.IsNullOrEmpty(_activeLicense.validUntil)) return -1;
 
@@ -1298,7 +1429,7 @@ namespace LTLM.SDK.Unity
             SecureStorage.Delete("license_key_" + projectId);
             SecureStorage.Delete("cached_tokens_" + projectId);
             SecureStorage.Delete("nonce_" + projectId);
-            
+
             if (_heartbeatRoutine != null)
             {
                 StopCoroutine(_heartbeatRoutine);
@@ -1327,7 +1458,8 @@ namespace LTLM.SDK.Unity
         /// <summary>
         /// Generates a hosted checkout URL for a new license.
         /// </summary>
-        public void CreateCheckoutSession(string policyId, string customerEmail, string redirectUrl, Action<string> onUrlReceived, Action<string> onError = null)
+        public void CreateCheckoutSession(string policyId, string customerEmail, string redirectUrl,
+            Action<string> onUrlReceived, Action<string> onError = null)
         {
             var request = new CheckoutRequest
             {
@@ -1347,7 +1479,8 @@ namespace LTLM.SDK.Unity
         /// <summary>
         /// Generates a hosted checkout URL for a token top-up.
         /// </summary>
-        public void CreateTopUpSession(string packId, string redirectUrl, Action<string> onUrlReceived, Action<string> onError = null)
+        public void CreateTopUpSession(string packId, string redirectUrl, Action<string> onUrlReceived,
+            Action<string> onError = null)
         {
             if (_activeLicense == null)
             {
@@ -1372,13 +1505,15 @@ namespace LTLM.SDK.Unity
 
         #endregion
 
-        public void ConsumeTokens(int amount, string action, Action<LicenseData> onConsumed = null, Action<string> onError = null)
+        public void ConsumeTokens(int amount, string action, Action<LicenseData> onConsumed = null,
+            Action<string> onError = null)
         {
             if (_activeLicense == null) return;
 
             if (_activeLicense.tokensEnabled == false)
             {
-                Debug.LogWarning("[LTLM] Token consumption is disabled for this license. Usage will be recorded on device but may be rejected by server.");
+                Debug.LogWarning(
+                    "[LTLM] Token consumption is disabled for this license. Usage will be recorded on device but may be rejected by server.");
             }
 
             // 1. Create the consumption log
@@ -1394,11 +1529,12 @@ namespace LTLM.SDK.Unity
             // 2. Optimistic Update: Reflect the "truth" immediately for the game layer
             if (_activeLicense.tokensConsumed.HasValue) _activeLicense.tokensConsumed += amount;
             if (_activeLicense.tokensRemaining.HasValue) _activeLicense.tokensRemaining -= amount;
-            
-            SecureStorage.Save("cached_tokens_" + projectId, (_activeLicense.tokensRemaining ?? 0).ToString(), DeviceID.GetHWID());
-            
+
+            SecureStorage.Save("cached_tokens_" + projectId, (_activeLicense.tokensRemaining ?? 0).ToString(),
+                DeviceID.GetHWID());
+
             onConsumed?.Invoke(_activeLicense);
-            
+
             // Fire the static event for global subscribers (optimistic)
             OnTokensConsumed?.Invoke(_activeLicense);
 
@@ -1413,7 +1549,8 @@ namespace LTLM.SDK.Unity
                 // OFFLINE: Queue for batch sync later
                 _pendingConsumptions.Add(usage);
                 SavePendingConsumptions();
-                Debug.Log($"[LTLM] Offline - token consumption queued for sync when online ({_pendingConsumptions.Count} pending)");
+                Debug.Log(
+                    $"[LTLM] Offline - token consumption queued for sync when online ({_pendingConsumptions.Count} pending)");
             }
         }
 
@@ -1433,16 +1570,18 @@ namespace LTLM.SDK.Unity
             StartCoroutine(_client.PostEncrypted<SingleConsumptionRequest, LicenseData>(
                 "/v1/sdk/pro/license/consume",
                 request,
-                fullLicense => {
+                fullLicense =>
+                {
                     // Update local license with absolute truth from server
                     _activeLicense = fullLicense;
                     CacheLicense(fullLicense);
                     Debug.Log("[LTLM] Token consumed. Server balance: " + fullLicense.tokensRemaining);
-                    
+
                     // Fire event with server-confirmed data
                     OnTokensConsumed?.Invoke(fullLicense);
                 },
-                err => {
+                err =>
+                {
                     // If server sync fails, queue it for batch sync later
                     Debug.LogWarning("[LTLM] Token sync failed, queuing for later: " + err);
                     _pendingConsumptions.Add(usage);
@@ -1456,7 +1595,7 @@ namespace LTLM.SDK.Unity
             if (_activeLicense == null || _isSyncingTokens || _pendingConsumptions.Count == 0) return;
 
             _isSyncingTokens = true;
-            
+
             var batch = new BatchConsumptionRequest
             {
                 key = _activeLicense.licenseKey,
@@ -1469,9 +1608,10 @@ namespace LTLM.SDK.Unity
             StartCoroutine(_client.PostEncrypted<BatchConsumptionRequest, LicenseData>(
                 "/v1/sdk/pro/license/consume-batch",
                 batch,
-                fullLicense => {
+                fullLicense =>
+                {
                     _isSyncingTokens = false;
-                    
+
                     // Remove the synced items (in case more were added while we were syncing)
                     _pendingConsumptions.RemoveAll(p => batch.usages.Contains(p));
                     SavePendingConsumptions();
@@ -1481,11 +1621,12 @@ namespace LTLM.SDK.Unity
                     CacheLicense(fullLicense);
 
                     Debug.Log("[LTLM] Token sync successful. Server balance: " + fullLicense.tokensRemaining);
-                    
+
                     // Fire event for global subscribers after server sync confirms
                     OnTokensConsumed?.Invoke(fullLicense);
                 },
-                err => {
+                err =>
+                {
                     _isSyncingTokens = false;
                     Debug.LogWarning("[LTLM] Token sync failed (will retry later): " + err);
                 }
@@ -1494,22 +1635,29 @@ namespace LTLM.SDK.Unity
 
         private void LoadPendingConsumptions()
         {
-            try {
+            try
+            {
                 string json = SecureStorage.Load("pending_usages_" + projectId, DeviceID.GetHWID());
-                if (!string.IsNullOrEmpty(json)) {
+                if (!string.IsNullOrEmpty(json))
+                {
                     _pendingConsumptions = JsonConvert.DeserializeObject<List<ConsumptionRequest>>(json);
                 }
-            } catch {
+            }
+            catch
+            {
                 _pendingConsumptions = new List<ConsumptionRequest>();
             }
         }
 
         private void SavePendingConsumptions()
         {
-            try {
+            try
+            {
                 string json = JsonConvert.SerializeObject(_pendingConsumptions);
                 SecureStorage.Save("pending_usages_" + projectId, json, DeviceID.GetHWID());
-            } catch (Exception e) {
+            }
+            catch (Exception e)
+            {
                 Debug.LogError("[LTLM] Failed to save pending consumptions: " + e.Message);
             }
         }
