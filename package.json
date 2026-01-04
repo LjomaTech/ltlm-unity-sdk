@@ -32,14 +32,9 @@
     "dependencies": {},
     "samples": [
         {
-            "displayName": "Demo Scenes",
+            "displayName": "Demo Scripts",
             "description": "Complete demo scenes showing license activation, token consumption, feature gates, and seat management.",
-            "path": "Demos"
-        },
-        {
-            "displayName": "LTLM UI-Toolkit Framework",
-            "description": "Complete demo scenes showing license activation, token consumption, feature gates, and seat management.",
-            "path": "LTLM.UI"
+            "path": "Demos~"
         }
     ]
 }

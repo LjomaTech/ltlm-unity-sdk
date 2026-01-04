@@ -1505,7 +1505,7 @@ namespace LTLM.SDK.Unity
                 return;
             }
 
-            StartCoroutine(_client.GetEncrypted<TrialEligibilityResult>(
+            StartCoroutine(_client.GetRequest<TrialEligibilityResult>(
                 $"/v1/sdk/pro/project/trial-eligibility?email={UnityWebRequest.EscapeURL(email)}",
                 res => onSuccess?.Invoke(res),
                 err => onError?.Invoke(err)
