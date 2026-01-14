@@ -1673,6 +1673,7 @@ namespace LTLM.SDK.Unity
                     if (_activeLicense.tokensRemaining.HasValue) _activeLicense.tokensRemaining += amount;
                     SecureStorage.Save("cached_tokens_" + projectId, 
                         (_activeLicense.tokensRemaining ?? 0).ToString(), DeviceID.GetHWID());
+                    OnTokensConsumed?.Invoke(_activeLicense);
                     
                     Debug.LogWarning("[LTLM] Offline token consumption is disabled. Connect to consume tokens.");
                     onError?.Invoke("Offline token consumption is disabled. Please connect to the internet.");
@@ -1729,6 +1730,7 @@ namespace LTLM.SDK.Unity
                         Debug.LogError("[LTLM] Token consumption denied by server: " + err);
                         if (_activeLicense.tokensConsumed.HasValue) _activeLicense.tokensConsumed -= usage.amount;
                         if (_activeLicense.tokensRemaining.HasValue) _activeLicense.tokensRemaining += usage.amount;
+                        OnTokensConsumed?.Invoke(_activeLicense);
                         SecureStorage.Save("cached_tokens_" + projectId, 
                             (_activeLicense.tokensRemaining ?? 0).ToString(), DeviceID.GetHWID());
                         CacheLicense(_activeLicense);
