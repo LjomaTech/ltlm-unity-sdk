@@ -118,6 +118,9 @@ namespace LTLM.SDK.Unity
         [Tooltip("Your application/software version. If empty, uses Application.version.")]
         public string softwareVersion;
 
+        [Tooltip("If true, allows token consumption while offline (queued for sync when online). If false, token consumption requires active connection.")]
+        public bool allowOfflineTokenConsumption = true;
+
         private LTLMClient _client;
         private LicenseData _activeLicense;
         private Coroutine _heartbeatRoutine;
@@ -373,17 +376,28 @@ namespace LTLM.SDK.Unity
                 err =>
                 {
                     _isValidating = false;
-                    Debug.LogWarning("[LTLM] Network Validation Failed. Checking offline grace..." + err);
-                    if (CheckOfflineGraceTimeout())
+                    
+                    // Only allow offline grace for actual connection/network errors
+                    // Server rejections (license not found, disabled, etc.) should fail immediately
+                    if (IsConnectionError(err))
                     {
-                        var status = GetLicenseStatus();
-                        OnValidationCompleted?.Invoke(true, status);
-                        onSuccess?.Invoke(_activeLicense, status);
+                        Debug.LogWarning("[LTLM] Network unavailable. Checking offline grace..." + err);
+                        if (CheckOfflineGraceTimeout())
+                        {
+                            var status = GetLicenseStatus();
+                            OnValidationCompleted?.Invoke(true, status);
+                            onSuccess?.Invoke(_activeLicense, status);
+                            return;
+                        }
+                        OnValidationCompleted?.Invoke(false, LicenseStatus.ConnectionRequired);
+                        onError?.Invoke("Offline grace period exceeded or no cached license found.");
                     }
                     else
                     {
-                        OnValidationCompleted?.Invoke(false, LicenseStatus.ConnectionRequired);
-                        onError?.Invoke("Offline grace period exceeded or no cached license found.");
+                        // Server explicitly rejected - do NOT try offline mode
+                        Debug.LogError("[LTLM] Server rejected request: " + err);
+                        OnValidationCompleted?.Invoke(false, LicenseStatus.Unauthenticated);
+                        onError?.Invoke(err);
                     }
                 }
             ));
@@ -461,6 +475,9 @@ namespace LTLM.SDK.Unity
 
         private IEnumerator HeartbeatRoutine()
         {
+            bool _isInOfflineGrace = false;
+            const float OFFLINE_RETRY_INTERVAL = 300f; // 5 minutes when trying to reconnect
+            
             while (true)
             {
                 if (_activeLicense == null) break;
@@ -477,6 +494,13 @@ namespace LTLM.SDK.Unity
                     request,
                     license =>
                     {
+                        // Successfully reconnected
+                        if (_isInOfflineGrace)
+                        {
+                            Debug.Log("[LTLM] Connection restored! Exiting offline grace mode.");
+                            _isInOfflineGrace = false;
+                        }
+                        
                         _activeLicense = license;
                         CacheLicense(license);
                         SecureStorage.Save("last_successful_sync_" + projectId,
@@ -484,6 +508,9 @@ namespace LTLM.SDK.Unity
                         ProcessEnforcement(license);
                         ProcessSeatStatus(license);
                         SyncPendingConsumptions();
+                        
+                        // Update status to active since we're connected
+                        OnLicenseStatusChanged?.Invoke(GetLicenseStatus());
                     },
                     err =>
                     {
@@ -495,13 +522,28 @@ namespace LTLM.SDK.Unity
                             Debug.Log("[LTLM] Security out-of-sync. Triggering re-activation...");
                             ActivateLicense(_activeLicense.licenseKey, DoNotShowLoading: true);
                         }
+                        else if (IsConnectionError(err))
+                        {
+                            // Connection error - enter/stay in offline grace mode
+                            if (!_isInOfflineGrace)
+                            {
+                                Debug.Log("[LTLM] Entering offline grace mode. Will retry every 5 minutes.");
+                                _isInOfflineGrace = true;
+                            }
+                            CheckOfflineGraceTimeout();
+                        }
                         else
                         {
-                            CheckOfflineGraceTimeout();
+                            // Server rejection - this is serious, don't retry frequently
+                            Debug.LogError("[LTLM] Server rejected heartbeat: " + err);
+                            _isInOfflineGrace = false;
                         }
                     }
                 );
-                yield return new WaitForSeconds(heartbeatIntervalSeconds);
+                
+                // Use shorter interval when trying to reconnect during offline grace
+                float waitInterval = _isInOfflineGrace ? OFFLINE_RETRY_INTERVAL : heartbeatIntervalSeconds;
+                yield return new WaitForSeconds(waitInterval);
             }
         }
 
@@ -1014,6 +1056,74 @@ namespace LTLM.SDK.Unity
                 OnLicenseStatusChanged?.Invoke(LicenseStatus.GracePeriod);
                 return true;
             }
+        }
+
+        /// <summary>
+        /// Determines if an error message indicates a connection/network problem
+        /// vs a server-side rejection. Connection errors allow offline grace and retry;
+        /// server errors should fail immediately without retry.
+        /// </summary>
+        /// <param name="error">The error message to analyze</param>
+        /// <returns>True if this is a connection error (retry allowed), false if server rejection</returns>
+        private static bool IsConnectionError(string error)
+        {
+            if (string.IsNullOrEmpty(error)) return true;
+            
+            string lower = error.ToLower();
+            
+            // Server rejection patterns - these should NOT trigger offline mode or retry
+            string[] serverErrorPatterns = {
+                "license not found",
+                "license is",           // "license is disabled", "license is revoked"
+                "insufficient",         // "insufficient tokens", "insufficient permissions"
+                "forbidden",
+                "unauthorized",
+                "not supported",
+                "not allowed",
+                "limit reached",
+                "access denied",
+                "invalid license",
+                "expired",
+                "suspended",
+                "revoked",
+                "disabled",
+                "terminated",
+                "tampered",
+                "tampering",
+                "signature",
+                "verification failed"
+            };
+            
+            foreach (var pattern in serverErrorPatterns)
+            {
+                if (lower.Contains(pattern)) return false;
+            }
+            
+            // Connection error patterns - these SHOULD trigger offline mode and retry
+            string[] connectionPatterns = {
+                "network",
+                "timeout",
+                "timed out",
+                "unable to connect",
+                "no route",
+                "connection refused",
+                "connection reset",
+                "host not found",
+                "dns",
+                "socket",
+                "ssl",
+                "tls",
+                "unreachable"
+            };
+            
+            foreach (var pattern in connectionPatterns)
+            {
+                if (lower.Contains(pattern)) return true;
+            }
+            
+            // Default: assume connection error for safety (allows offline grace)
+            // This is safer than denying access due to unexpected error messages
+            return true;
         }
 
         private void CacheLicense(LicenseData license)
@@ -1555,7 +1665,21 @@ namespace LTLM.SDK.Unity
             }
             else
             {
-                // OFFLINE: Queue for batch sync later
+                // OFFLINE: Check if offline consumption is allowed
+                if (!allowOfflineTokenConsumption)
+                {
+                    // Rollback optimistic update - offline consumption not allowed
+                    if (_activeLicense.tokensConsumed.HasValue) _activeLicense.tokensConsumed -= amount;
+                    if (_activeLicense.tokensRemaining.HasValue) _activeLicense.tokensRemaining += amount;
+                    SecureStorage.Save("cached_tokens_" + projectId, 
+                        (_activeLicense.tokensRemaining ?? 0).ToString(), DeviceID.GetHWID());
+                    
+                    Debug.LogWarning("[LTLM] Offline token consumption is disabled. Connect to consume tokens.");
+                    onError?.Invoke("Offline token consumption is disabled. Please connect to the internet.");
+                    return;
+                }
+                
+                // Queue for batch sync later
                 _pendingConsumptions.Add(usage);
                 SavePendingConsumptions();
                 Debug.Log(
@@ -1591,10 +1715,24 @@ namespace LTLM.SDK.Unity
                 },
                 err =>
                 {
-                    // If server sync fails, queue it for batch sync later
-                    Debug.LogWarning("[LTLM] Token sync failed, queuing for later: " + err);
-                    _pendingConsumptions.Add(usage);
-                    SavePendingConsumptions();
+                    // Only queue for retry if it's a connection error
+                    // Server denials (insufficient tokens, disabled) should NOT be retried
+                    if (IsConnectionError(err))
+                    {
+                        Debug.LogWarning("[LTLM] Token sync failed (connection), queuing for later: " + err);
+                        _pendingConsumptions.Add(usage);
+                        SavePendingConsumptions();
+                    }
+                    else
+                    {
+                        // Server explicitly denied - rollback optimistic update
+                        Debug.LogError("[LTLM] Token consumption denied by server: " + err);
+                        if (_activeLicense.tokensConsumed.HasValue) _activeLicense.tokensConsumed -= usage.amount;
+                        if (_activeLicense.tokensRemaining.HasValue) _activeLicense.tokensRemaining += usage.amount;
+                        SecureStorage.Save("cached_tokens_" + projectId, 
+                            (_activeLicense.tokensRemaining ?? 0).ToString(), DeviceID.GetHWID());
+                        CacheLicense(_activeLicense);
+                    }
                 }
             ));
         }
@@ -1637,7 +1775,20 @@ namespace LTLM.SDK.Unity
                 err =>
                 {
                     _isSyncingTokens = false;
-                    Debug.LogWarning("[LTLM] Token sync failed (will retry later): " + err);
+                    
+                    // Connection error - keep pending items for retry
+                    if (IsConnectionError(err))
+                    {
+                        Debug.LogWarning("[LTLM] Token sync failed (connection), will retry later: " + err);
+                    }
+                    else
+                    {
+                        // Server rejected the batch - clear pending items to prevent infinite retry
+                        // This can happen if tokens were already consumed or license changed
+                        Debug.LogError("[LTLM] Token sync rejected by server, clearing pending queue: " + err);
+                        _pendingConsumptions.RemoveAll(p => batch.usages.Contains(p));
+                        SavePendingConsumptions();
+                    }
                 }
             ));
         }

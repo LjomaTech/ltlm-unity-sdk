@@ -431,6 +431,32 @@ namespace LTLM.SDK.Core.Models
         public string error;
     }
 
+    /// <summary>
+    /// Error codes for standardized error identification across the SDK.
+    /// Use with LTLMManager.IsConnectionError() to differentiate between
+    /// network issues (retry/offline allowed) and server rejections (fail immediately).
+    /// </summary>
+    public static class LTLMErrorCodes
+    {
+        // Connection/Network Errors - Can retry, offline grace allowed
+        public const string NETWORK_ERROR = "NETWORK_ERROR";
+        public const string TIMEOUT = "TIMEOUT";
+        public const string CONNECTION_REFUSED = "CONNECTION_REFUSED";
+        
+        // Server Errors - Should NOT retry, no offline grace
+        public const string LICENSE_NOT_FOUND = "LICENSE_NOT_FOUND";
+        public const string LICENSE_DISABLED = "LICENSE_DISABLED";
+        public const string INSUFFICIENT_TOKENS = "INSUFFICIENT_TOKENS";
+        public const string TOKEN_CONSUMPTION_DISABLED = "TOKEN_CONSUMPTION_DISABLED";
+        public const string SEAT_LIMIT_REACHED = "SEAT_LIMIT_REACHED";
+        public const string VERSION_NOT_SUPPORTED = "VERSION_NOT_SUPPORTED";
+        public const string GEOFENCING_BLOCKED = "GEOFENCING_BLOCKED";
+        public const string ACTIVATION_LIMIT = "ACTIVATION_LIMIT";
+        public const string UNAUTHORIZED = "UNAUTHORIZED";
+        public const string RESPONSE_TAMPERED = "RESPONSE_TAMPERED";
+        public const string SERVER_ERROR = "SERVER_ERROR";
+    }
+
     // Request Models
     [Serializable]
     public class ActivationRequest
