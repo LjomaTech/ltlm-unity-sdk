@@ -1349,16 +1349,9 @@ namespace LTLM.SDK.Unity
         /// <returns>True if the feature is enabled ("true" or "1")</returns>
         public bool HasCapability(string featureName)
         {
-            if (_activeLicense?.config?.features == null) return false;
+            if (_activeLicense?.config?.capabilities == null) return false;
 
-            if (_activeLicense.config.features.TryGetValue(featureName, out string val))
-            {
-                if (val == null) return false;
-                string sVal = val.ToLower();
-                return sVal == "true" || sVal == "1";
-            }
-
-            return false;
+            return _activeLicense.config.capabilities.Contains(featureName);
         }
 
         /// <summary>
@@ -1408,23 +1401,9 @@ namespace LTLM.SDK.Unity
         /// <returns>List of feature names that are enabled</returns>
         public List<string> GetEntitledCapabilites(LicenseData _license = null)
         {
-            List<string> entitledCapabilities = new List<string>();
-
             _license ??= _activeLicense;
-            if (_license?.config?.features == null) return entitledCapabilities;
-
-            foreach (var feature in _license.config.features)
-            {
-                if (string.IsNullOrEmpty(feature.Value)) continue;
-                
-                string sVal = feature.Value.ToLower();
-                if (sVal == "true" || sVal == "1")
-                {
-                    entitledCapabilities.Add(feature.Key);
-                }
-            }
-
-            return entitledCapabilities;
+            if (_license?.config?.capabilities == null) return new List<string>();
+            return _license.config.capabilities;
         }
 
 
@@ -1629,12 +1608,6 @@ namespace LTLM.SDK.Unity
         {
             if (_activeLicense == null) return;
 
-            if (_activeLicense.tokensEnabled == false)
-            {
-                Debug.LogWarning(
-                    "[LTLM] Token consumption is disabled for this license. Usage will be recorded on device but may be rejected by server.");
-            }
-
             // 1. Create the consumption log
             var usage = new ConsumptionRequest
             {
@@ -1644,44 +1617,50 @@ namespace LTLM.SDK.Unity
                 hwid = DeviceID.GetHWID(),
                 timestamp = SecureClock.GetEffectiveTime(projectId).ToString("o") // ISO 8601
             };
-
-            // 2. Optimistic Update: Reflect the "truth" immediately for the game layer
-            if (_activeLicense.tokensConsumed.HasValue) _activeLicense.tokensConsumed += amount;
-            if (_activeLicense.tokensRemaining.HasValue) _activeLicense.tokensRemaining -= amount;
-
-            SecureStorage.Save("cached_tokens_" + projectId, (_activeLicense.tokensRemaining ?? 0).ToString(),
-                DeviceID.GetHWID());
-
-            onConsumed?.Invoke(_activeLicense);
-
-            // Fire the static event for global subscribers (optimistic)
-            OnTokensConsumed?.Invoke(_activeLicense);
+            
+            if (_activeLicense.tokensEnabled == false)
+            {
+                Debug.LogWarning(
+                    "[LTLM] Token consumption is disabled for this license. Usage will be recorded on device but may be rejected by server.");
+                onConsumed?.Invoke(_activeLicense);
+                return;
+            }
 
             // 3. Sync with server using appropriate API based on connectivity
             if (Application.internetReachability != NetworkReachability.NotReachable)
             {
                 // ONLINE: Send immediately via single consumption API
-                SendSingleConsumption(usage);
+                SendSingleConsumption(usage, onConsumed, onError);
             }
             else
             {
                 // OFFLINE: Check if offline consumption is allowed
                 if (!allowOfflineTokenConsumption)
                 {
-                    // Rollback optimistic update - offline consumption not allowed
-                    if (_activeLicense.tokensConsumed.HasValue) _activeLicense.tokensConsumed -= amount;
-                    if (_activeLicense.tokensRemaining.HasValue) _activeLicense.tokensRemaining += amount;
-                    SecureStorage.Save("cached_tokens_" + projectId, 
-                        (_activeLicense.tokensRemaining ?? 0).ToString(), DeviceID.GetHWID());
-                    OnTokensConsumed?.Invoke(_activeLicense);
-                    
                     Debug.LogWarning("[LTLM] Offline token consumption is disabled. Connect to consume tokens.");
                     onError?.Invoke("Offline token consumption is disabled. Please connect to the internet.");
                     return;
                 }
-                
+                // 2. Optimistic Update: Reflect the "truth" immediately for the game layer
+                if (_activeLicense.tokensRemaining.HasValue)
+                {
+                    if (_activeLicense.tokensRemaining < amount)
+                    {
+                        onError?.Invoke("Not enough tokens");
+                        return;
+                    }
+                    _activeLicense.tokensRemaining -= amount;
+                }
+                if (_activeLicense.tokensConsumed.HasValue) _activeLicense.tokensConsumed += amount;
+
+                SecureStorage.Save("cached_tokens_" + projectId, (_activeLicense.tokensRemaining ?? 0).ToString(),
+                    DeviceID.GetHWID());
+
+                // Fire the static event for global subscribers (optimistic)
+                OnTokensConsumed?.Invoke(_activeLicense);
                 // Queue for batch sync later
                 _pendingConsumptions.Add(usage);
+                onConsumed?.Invoke(_activeLicense);
                 SavePendingConsumptions();
                 Debug.Log(
                     $"[LTLM] Offline - token consumption queued for sync when online ({_pendingConsumptions.Count} pending)");
@@ -1691,7 +1670,8 @@ namespace LTLM.SDK.Unity
         /// <summary>
         /// Sends a single token consumption to the server (used when online).
         /// </summary>
-        private void SendSingleConsumption(ConsumptionRequest usage)
+        private void SendSingleConsumption(ConsumptionRequest usage, Action<LicenseData> onConsumed = null,
+            Action<string> onError = null)
         {
             var request = new SingleConsumptionRequest
             {
@@ -1710,7 +1690,7 @@ namespace LTLM.SDK.Unity
                     _activeLicense = fullLicense;
                     CacheLicense(fullLicense);
                     Debug.Log("[LTLM] Token consumed. Server balance: " + fullLicense.tokensRemaining);
-
+                    onConsumed?.Invoke(fullLicense);
                     // Fire event with server-confirmed data
                     OnTokensConsumed?.Invoke(fullLicense);
                 },
@@ -1722,6 +1702,7 @@ namespace LTLM.SDK.Unity
                     {
                         Debug.LogWarning("[LTLM] Token sync failed (connection), queuing for later: " + err);
                         _pendingConsumptions.Add(usage);
+                        onConsumed?.Invoke(_activeLicense);
                         SavePendingConsumptions();
                     }
                     else
@@ -1730,9 +1711,10 @@ namespace LTLM.SDK.Unity
                         Debug.LogError("[LTLM] Token consumption denied by server: " + err);
                         if (_activeLicense.tokensConsumed.HasValue) _activeLicense.tokensConsumed -= usage.amount;
                         if (_activeLicense.tokensRemaining.HasValue) _activeLicense.tokensRemaining += usage.amount;
-                        OnTokensConsumed?.Invoke(_activeLicense);
+                        onError?.Invoke(err);
                         SecureStorage.Save("cached_tokens_" + projectId, 
                             (_activeLicense.tokensRemaining ?? 0).ToString(), DeviceID.GetHWID());
+                        OnTokensConsumed?.Invoke(_activeLicense);
                         CacheLicense(_activeLicense);
                     }
                 }
