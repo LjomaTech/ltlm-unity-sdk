@@ -1,8 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using Newtonsoft.Json;
 
 namespace LTLM.SDK.Core.Models
 {
+    #region Transport
+
     [Serializable]
     public class SignedResponse<T>
     {
@@ -11,6 +15,71 @@ namespace LTLM.SDK.Core.Models
         public string server_nonce;
         public long timestamp;
     }
+
+    /// <summary>
+    /// Structured error produced by <c>LTLMClient</c>. Legacy string callbacks receive <see cref="Message"/>;
+    /// use <c>LTLMManager.LastError</c> to inspect the typed version.
+    /// </summary>
+    public class LTLMRequestError
+    {
+        /// <summary>Human readable message (server message when available).</summary>
+        public string Message;
+
+        /// <summary>HTTP status code, 0 when the request never reached the server.</summary>
+        public long HttpStatus;
+
+        /// <summary>True for DNS/socket/timeout failures - the server was not reached. Offline grace may apply.</summary>
+        public bool IsNetworkError;
+
+        /// <summary>True when the local SDK failed to decrypt/verify the response (possible tampering).</summary>
+        public bool IsIntegrityError;
+
+        /// <summary>Optional machine readable code from the server (e.g. PRO_SDK_REQUIRED).</summary>
+        public string Code;
+
+        /// <summary>Raw response body, for diagnostics.</summary>
+        public string RawBody;
+
+        /// <summary>Server rejected the nonce chain - the SDK should re-activate to resync.</summary>
+        public bool IsNonceMismatch =>
+            HttpStatus == 401 && !string.IsNullOrEmpty(Message) &&
+            Message.IndexOf("nonce", StringComparison.OrdinalIgnoreCase) >= 0;
+
+        /// <summary>A server-side rejection (4xx/5xx) as opposed to a transport failure.</summary>
+        public bool IsServerRejection => !IsNetworkError && !IsIntegrityError && HttpStatus > 0;
+
+        public static LTLMRequestError Network(string message, string raw = null) =>
+            new LTLMRequestError { Message = message, IsNetworkError = true, RawBody = raw };
+
+        public static LTLMRequestError Integrity(string message, string raw = null) =>
+            new LTLMRequestError { Message = message, IsIntegrityError = true, RawBody = raw };
+
+        public static LTLMRequestError Local(string message) =>
+            new LTLMRequestError { Message = message };
+
+        public override string ToString() => Message;
+    }
+
+    /// <summary>Exception thrown by the Task-based (async) SDK API. Wraps <see cref="LTLMRequestError"/>.</summary>
+    public class LTLMException : Exception
+    {
+        public LTLMRequestError Error { get; }
+
+        public LTLMException(LTLMRequestError error)
+            : base(error?.Message ?? "LTLM request failed")
+        {
+            Error = error ?? LTLMRequestError.Local("Unknown error");
+        }
+
+        public LTLMException(string message)
+            : this(LTLMRequestError.Local(message))
+        {
+        }
+    }
+
+    #endregion
+
+    #region License
 
     [Serializable]
     public class MachineData
@@ -36,72 +105,93 @@ namespace LTLM.SDK.Core.Models
         public int LicenseID;
         public int ProjectID;
         public string licenseKey;
-        public string status; // active, VALID_NO_SEAT, suspended, expired, revoked, grace_period
+        public string status; // active, VALID_NO_SEAT, KICKED, suspended, expired, revoked, grace_period, ...
         public string environment; // production, staging, development
-        
+
         public string validUntil;
         public string lastCheckIn;
         public string nextBillingDate;
-        
+
         public int? tokensLimit;
         public int? tokensConsumed;
         public int? tokensRemaining;
         public int? maxActivations; // Total allowed HWIDs
         public int? maxConcurrentSeats; // Max simultaneous users
         public int? activeSeats; // Current simultaneous users
-        
+
         // Seat management fields
-        public string seatStatus; // OCCUPIED, NO_SEAT, RELEASED, N/A
-        public bool? canReleaseSeat; // Whether user can release other seats
-        public KickedNotice kickedNotice; // Present if this device was kicked
-        
+        public string seatStatus; // OCCUPIED, NO_SEAT, RELEASED, KICKED, N/A
+        public bool? canReleaseSeat;
+        public KickedNotice kickedNotice;
+
         // Enforcement settings (from server)
-        public bool? seatsEnabled;      // Whether concurrent seats are enabled for this license
-        public bool? tokensEnabled;     // Whether token consumption is enabled
-        public bool? offlineEnabled;    // Whether offline mode is enabled
-        public int? heartbeatIntervalSeconds; // Server-specified heartbeat interval
-        public int? offlineGraceHours;   // Hours allowed offline before requiring revalidation
-        
+        public bool? seatsEnabled;
+        public bool? tokensEnabled;
+        public bool? offlineEnabled;
+        public int? heartbeatIntervalSeconds;
+        public int? offlineGraceHours;
+
         public string subscriptionStatus;
         public string detectedCountry;
 
         public List<MachineData> machines;
         public PolicyData policy;
         public CustomerData customer;
-        
-        /// <summary>
-        /// Resolved configuration with overrides applied (Policy + Project + License).
-        /// Access limits, features, capabilities, projectSettings, enforcement settings.
-        /// </summary>
+
+        /// <summary>Resolved configuration with overrides applied (Policy + Project + License).</summary>
         public LicenseConfig config;
-        
-        /// <summary>
-        /// Custom org-defined settings merged in order: Project (base) → Policy → License.
-        /// These are arbitrary key-value pairs defined by the organization for their own use
-        /// (e.g., API endpoints, feature flags, environment URLs).
-        /// </summary>
+
+        /// <summary>User-defined settings (synced across devices).</summary>
+        public Dictionary<string, object> userSettings;
+
+        /// <summary>Present only on offline (.ltlm) licenses.</summary>
+        public string issuedAt;
+
+        // ------------------------------------------------------------------
+        // Convenience helpers (not serialized)
+        // ------------------------------------------------------------------
+
+        /// <summary>Org-defined settings merged Project → Policy → License.</summary>
+        [JsonIgnore]
         public Dictionary<string, object> ProjectSettings => config?.projectSettings ?? new Dictionary<string, object>();
-        
-        /// <summary>
-        /// Gets a specific project setting value with type conversion.
-        /// </summary>
+
+        /// <summary>Gets a project setting with type conversion.</summary>
         public T GetProjectSetting<T>(string key, T defaultValue = default)
         {
-            var settings = ProjectSettings;
-            if (settings != null && settings.TryGetValue(key, out var value))
+            var settings = config?.projectSettings;
+            if (settings != null && settings.TryGetValue(key, out var value) && value != null)
             {
                 try
                 {
                     if (value is T typed) return typed;
-                    return (T)Convert.ChangeType(value, typeof(T));
+                    if (value is Newtonsoft.Json.Linq.JToken token) return token.ToObject<T>();
+                    return (T)Convert.ChangeType(value, typeof(T), CultureInfo.InvariantCulture);
                 }
                 catch { }
             }
             return defaultValue;
         }
-        
-        // User-defined settings (synced across devices)
-        public Dictionary<string, object> userSettings;
+
+        /// <summary>True for perpetual policies or licenses without an expiry date.</summary>
+        [JsonIgnore]
+        public bool IsPerpetual =>
+            (policy != null && policy.type == "perpetual") || string.IsNullOrEmpty(validUntil);
+
+        /// <summary>Expiry as UTC DateTime, or null if perpetual/unknown.</summary>
+        [JsonIgnore]
+        public DateTime? ValidUntilUtc => LTLMDate.ParseUtc(validUntil);
+
+        /// <summary>Next billing date as UTC DateTime, or null.</summary>
+        [JsonIgnore]
+        public DateTime? NextBillingDateUtc => LTLMDate.ParseUtc(nextBillingDate);
+
+        /// <summary>True when the capability list contains <paramref name="name"/> or the feature flag is on.</summary>
+        public bool HasCapability(string name)
+        {
+            if (string.IsNullOrEmpty(name) || config == null) return false;
+            if (config.capabilities != null && config.capabilities.Contains(name)) return true;
+            return config.IsFeatureEnabled(name);
+        }
     }
 
     [Serializable]
@@ -132,8 +222,15 @@ namespace LTLM.SDK.Core.Models
     }
 
     [Serializable]
+    public class GetSeatsRequest
+    {
+        public string key;
+    }
+
+    [Serializable]
     public class ReleaseSeatRequest
     {
+        public string key;
         public string targetHwid;
         public string callerHwid;
         public bool claimSeat;
@@ -149,6 +246,10 @@ namespace LTLM.SDK.Core.Models
         public int activeSeats;
     }
 
+    #endregion
+
+    #region Policy
+
     [Serializable]
     public class PolicyData
     {
@@ -159,51 +260,55 @@ namespace LTLM.SDK.Core.Models
         public string shortDescription;
         public float? price;
         public string currency;
-        
+
         public string recurringInterval; // day, week, month, year
         public int? recurringIntervalCount;
         public float? recurringPrice;
 
         public bool isAirGapped;
         public string environment;
-        
-        // Policy config - includes limits, features, etc. for store/marketplace display
-        // Note: This is ONLY populated by buyable-policies endpoint, NOT by license validation
-        // (license validation uses LicenseData.config for resolved settings)
+
+        /// <summary>Only populated by buyable-policies, not by license validation (see LicenseData.config).</summary>
         public PolicyConfig config;
-        
-        // Top-up options (policy-level only, not overrideable per license)
+
+        /// <summary>Top-up options (policy-level only).</summary>
         public List<TopUpOption> topUpOptions;
+
+        /// <summary>Top-ups from either the policy summary or the raw policy config.</summary>
+        [JsonIgnore]
+        public List<TopUpOption> ResolvedTopUpOptions =>
+            topUpOptions ?? config?.customerActions?.topUpOptions ?? new List<TopUpOption>();
     }
 
-    #region License Config (Resolved/Overrideable Settings)
-    
-    /// <summary>
-    /// Resolved license configuration with all overrides applied.
-    /// Contains only overrideable items (not full policy config to avoid duplication).
-    /// </summary>
+    /// <summary>Resolved license configuration with all overrides applied.</summary>
     [Serializable]
     public class LicenseConfig
     {
         public PolicyLimits limits;
-        public Dictionary<string, string> features;
+        public Dictionary<string, object> features;
         public List<string> capabilities;
         public Dictionary<string, object> projectSettings;
         public PolicyVersioning versioning;
         public GeofencingConfig geofencing;
         public SDKEnforcementConfig sdkEnforcement;
         public LicenseCustomerActions customerActions;
+
+        /// <summary>Feature flags are booleans on the server; older policies used "true"/"1" strings.</summary>
+        public bool IsFeatureEnabled(string name)
+        {
+            if (features == null || string.IsNullOrEmpty(name)) return false;
+            if (!features.TryGetValue(name, out var v) || v == null) return false;
+            return LTLMValue.IsTruthy(v);
+        }
     }
 
-    /// <summary>
-    /// SDK enforcement settings (overrideable per license).
-    /// </summary>
     [Serializable]
     public class SDKEnforcementConfig
     {
         public HeartbeatConfig heartbeat;
         public OfflineGracePeriodConfig offlineGracePeriod;
-        public string mode; // standard, pro_only
+        public string mode; // standard, sdk_only
+        public int? heartbeatIntervalSeconds; // legacy
     }
 
     [Serializable]
@@ -220,9 +325,6 @@ namespace LTLM.SDK.Core.Models
         public int duration; // in hours
     }
 
-    /// <summary>
-    /// Geofencing configuration (region restrictions).
-    /// </summary>
     [Serializable]
     public class GeofencingConfig
     {
@@ -231,19 +333,14 @@ namespace LTLM.SDK.Core.Models
         public List<string> blockedCountries;
     }
 
-    /// <summary>
-    /// Customer actions configuration (without topUpOptions which are policy-level).
-    /// </summary>
     [Serializable]
     public class LicenseCustomerActions
     {
         public bool allowHardwareRelease;
         public bool allowRemoteSeatRelease;
         public bool canBuyTopUps;
-        // Note: topUpOptions are in PolicyData.topUpOptions (policy-level only)
+        public int? seatReleaseCooldownSeconds;
     }
-    
-    #endregion
 
     [Serializable]
     public class PolicyConfig
@@ -254,7 +351,33 @@ namespace LTLM.SDK.Core.Models
         public PolicyMetadata metadata;
         public PolicyVersioning versioning;
         public PolicyVisibility visibility;
-        public Dictionary<string, string> features;
+        public GeofencingConfig geofencing;
+        public SDKEnforcementConfig sdkEnforcement;
+        public Dictionary<string, object> features;
+        public List<string> capabilities;
+
+        public bool IsFeatureEnabled(string name)
+        {
+            if (features == null || string.IsNullOrEmpty(name)) return false;
+            if (!features.TryGetValue(name, out var v) || v == null) return false;
+            return LTLMValue.IsTruthy(v);
+        }
+
+        /// <summary>Capabilities list plus any feature flag that is switched on.</summary>
+        [JsonIgnore]
+        public List<string> EnabledCapabilities
+        {
+            get
+            {
+                var list = new List<string>();
+                if (capabilities != null) list.AddRange(capabilities);
+                if (features != null)
+                    foreach (var kv in features)
+                        if (kv.Value != null && LTLMValue.IsTruthy(kv.Value) && !list.Contains(kv.Key))
+                            list.Add(kv.Key);
+                return list;
+            }
+        }
     }
 
     [Serializable]
@@ -269,9 +392,10 @@ namespace LTLM.SDK.Core.Models
     [Serializable]
     public class PolicyTimeLimit
     {
-        public string mode; // duration, absolute, relative
+        public string mode; // duration, absolute, relative, expiry
         public int durationDays;
         public int gracePeriodDays;
+        public string expiryDate;
     }
 
     [Serializable]
@@ -280,7 +404,7 @@ namespace LTLM.SDK.Core.Models
         public bool enabled;
         public int maxSeats;
     }
-    
+
     [Serializable]
     public class PolicyTokenLimit
     {
@@ -291,7 +415,7 @@ namespace LTLM.SDK.Core.Models
     [Serializable]
     public class PolicyActivationsLimit
     {
-        public bool hwidReqiured;
+        public bool hwidRequired;
         public int maxDevices;
     }
 
@@ -301,6 +425,7 @@ namespace LTLM.SDK.Core.Models
         public bool allowHardwareRelease;
         public bool allowRemoteSeatRelease;
         public bool canBuyTopUps;
+        public int? seatReleaseCooldownSeconds;
         public List<TopUpOption> topUpOptions;
     }
 
@@ -323,13 +448,14 @@ namespace LTLM.SDK.Core.Models
         public float amount;
         public string currency;
     }
-    
+
     [Serializable]
     public class PolicyVersioning
     {
         public bool enabled;
         public string maxVersion;
         public string minVersion;
+        public List<string> allowedVersions;
     }
 
     [Serializable]
@@ -346,6 +472,10 @@ namespace LTLM.SDK.Core.Models
         public bool dashboard;
     }
 
+    #endregion
+
+    #region Developer (Editor) Models
+
     [Serializable]
     public class DevProjectData
     {
@@ -357,15 +487,14 @@ namespace LTLM.SDK.Core.Models
         public bool isPublic;
         public string category;
         public List<string> tags;
-        
+
         public string publicKey;
         public string secretKey;
-        
+
         public List<string> capabilities;
         public AnalyticsConfig analytics;
         public Dictionary<string, object> settings;
-        
-        // Organization info
+
         public int orgId;
         public string orgName;
     }
@@ -389,8 +518,8 @@ namespace LTLM.SDK.Core.Models
     {
         public int id;
         public string name;
-        public string role;   // Owner, Admin, Member
-        public string status; // active, suspended, etc.
+        public string role;
+        public string status;
     }
 
     [Serializable]
@@ -406,7 +535,7 @@ namespace LTLM.SDK.Core.Models
     {
         public string username;
         public string password;
-        public string mfaToken; // For MFA if required
+        public string mfaToken;
     }
 
     [Serializable]
@@ -418,52 +547,60 @@ namespace LTLM.SDK.Core.Models
         public string accessToken;
         public bool mfaRequired;
         public string mfaMethod;
-        public string mfaToken; // Token for MFA verification
-        public int userId; // For MFA flow
+        public string mfaToken;
+        public int userId;
     }
+
+    #endregion
+
+    #region Errors
 
     [Serializable]
     public class LTLMError
     {
-        public string status; 
+        public string status;
         public string message;
         public bool isOperational;
         public string error;
+        public string code;
     }
 
-    /// <summary>
-    /// Error codes for standardized error identification across the SDK.
-    /// Use with LTLMManager.IsConnectionError() to differentiate between
-    /// network issues (retry/offline allowed) and server rejections (fail immediately).
-    /// </summary>
+    /// <summary>Machine readable error codes the server may return in <c>code</c>.</summary>
     public static class LTLMErrorCodes
     {
-        // Connection/Network Errors - Can retry, offline grace allowed
         public const string NETWORK_ERROR = "NETWORK_ERROR";
         public const string TIMEOUT = "TIMEOUT";
-        public const string CONNECTION_REFUSED = "CONNECTION_REFUSED";
-        
-        // Server Errors - Should NOT retry, no offline grace
+
         public const string LICENSE_NOT_FOUND = "LICENSE_NOT_FOUND";
         public const string LICENSE_DISABLED = "LICENSE_DISABLED";
-        public const string INSUFFICIENT_TOKENS = "INSUFFICIENT_TOKENS";
-        public const string TOKEN_CONSUMPTION_DISABLED = "TOKEN_CONSUMPTION_DISABLED";
-        public const string SEAT_LIMIT_REACHED = "SEAT_LIMIT_REACHED";
+        public const string INVALID_PROJECT_SECRET = "INVALID_PROJECT_SECRET";
+        public const string PRO_SDK_REQUIRED = "PRO_SDK_REQUIRED";
+        public const string OFFLINE_ACTIVATION_REQUIRED = "OFFLINE_ACTIVATION_REQUIRED";
         public const string VERSION_NOT_SUPPORTED = "VERSION_NOT_SUPPORTED";
-        public const string GEOFENCING_BLOCKED = "GEOFENCING_BLOCKED";
-        public const string ACTIVATION_LIMIT = "ACTIVATION_LIMIT";
-        public const string UNAUTHORIZED = "UNAUTHORIZED";
+        public const string REGION_BLOCKED = "REGION_BLOCKED";
+        public const string DEVICE_LIMIT_REACHED = "DEVICE_LIMIT_REACHED";
+        public const string SEAT_LIMIT_REACHED = "SEAT_LIMIT_REACHED";
+        public const string SEAT_RELEASE_COOLDOWN = "SEAT_RELEASE_COOLDOWN";
+        public const string SEATS_DISABLED = "SEATS_DISABLED";
+        public const string REMOTE_RELEASE_DISABLED = "REMOTE_RELEASE_DISABLED";
+        public const string INSUFFICIENT_TOKENS = "INSUFFICIENT_TOKENS";
+        public const string TOKENS_DISABLED = "TOKENS_DISABLED";
+        public const string NONCE_MISMATCH = "NONCE_MISMATCH";
+        public const string DECRYPT_FAILED = "DECRYPT_FAILED";
         public const string RESPONSE_TAMPERED = "RESPONSE_TAMPERED";
         public const string SERVER_ERROR = "SERVER_ERROR";
     }
 
-    // Request Models
+    #endregion
+
+    #region Request Models
+
     [Serializable]
     public class ActivationRequest
     {
         public string key;
         public string hwid;
-        public string version;      // SDK Version
+        public string version; // SDK Version
         public string clientVersion; // Software/App Version
         public string nickname;
         public Dictionary<string, object> meta;
@@ -474,7 +611,7 @@ namespace LTLM.SDK.Core.Models
     {
         public string key;
         public string hwid;
-        public bool isClosing; // If true, this seat is being released
+        public bool isClosing;
     }
 
     [Serializable]
@@ -484,13 +621,13 @@ namespace LTLM.SDK.Core.Models
         public int amount;
         public string action;
         public string hwid;
-        public string timestamp; // For offline usage tracking
+        public string timestamp; // ISO 8601, for offline usage tracking
         public Dictionary<string, object> meta;
+
+        /// <summary>Client-generated id so a queued consumption is never double-counted.</summary>
+        public string clientId;
     }
 
-    /// <summary>
-    /// Request for single token consumption (online mode).
-    /// </summary>
     [Serializable]
     public class SingleConsumptionRequest
     {
@@ -540,6 +677,7 @@ namespace LTLM.SDK.Core.Models
         public string sessionId;
         public string message;
     }
+
     [Serializable]
     public class PortfolioResponse
     {
@@ -547,8 +685,29 @@ namespace LTLM.SDK.Core.Models
         public List<LicenseData> licenses;
     }
 
+    [Serializable]
+    public class OtpRequest
+    {
+        public string email;
+    }
+
+    [Serializable]
+    public class OtpVerifyRequest
+    {
+        public string email;
+        public string otp;
+    }
+
+    [Serializable]
+    public class BuyablePoliciesRequest
+    {
+        public string hwid;
+    }
+
+    #endregion
+
     #region User Settings (Cloud Sync)
-    
+
     [Serializable]
     public class UserSettingsRequest
     {
@@ -572,28 +731,56 @@ namespace LTLM.SDK.Core.Models
         public Dictionary<string, object> settings;
         public string updatedAt;
     }
-    
+
     #endregion
 
     #region Trial Eligibility
-    
-    /// <summary>
-    /// Result of a trial eligibility check.
-    /// Use CheckTrialEligibility to verify before showing trial options.
-    /// </summary>
+
     [Serializable]
     public class TrialEligibilityResult
     {
-        /// <summary>Whether the customer is eligible for a trial.</summary>
         public bool eligible;
-        
-        /// <summary>Reason code if not eligible ("previous_trial", "duplicate_card", etc.).</summary>
         public string reason;
-        
-        /// <summary>User-facing message explaining eligibility status.</summary>
         public string message;
     }
-    
+
+    #endregion
+
+    #region Helpers
+
+    /// <summary>Culture-invariant, UTC date parsing for server timestamps.</summary>
+    public static class LTLMDate
+    {
+        public static DateTime? ParseUtc(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return null;
+            if (DateTime.TryParse(value, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var dt))
+                return dt;
+            return null;
+        }
+
+        public static string ToIso(DateTime utc) => utc.ToString("o", CultureInfo.InvariantCulture);
+    }
+
+    internal static class LTLMValue
+    {
+        public static bool IsTruthy(object v)
+        {
+            switch (v)
+            {
+                case bool b: return b;
+                case string s:
+                    s = s.Trim().ToLowerInvariant();
+                    return s == "true" || s == "1" || s == "yes" || s == "on";
+                case int i: return i != 0;
+                case long l: return l != 0;
+                case double d: return Math.Abs(d) > double.Epsilon;
+                case Newtonsoft.Json.Linq.JValue jv: return IsTruthy(jv.Value);
+                default: return false;
+            }
+        }
+    }
+
     #endregion
 }
-

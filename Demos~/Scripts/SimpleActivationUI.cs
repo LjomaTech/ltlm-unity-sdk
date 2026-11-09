@@ -101,7 +101,7 @@ namespace LTLM.SDK.Demos
                 activationStatusText.text = "License valid but all seats are in use. Close the app on another device.";
                 activationStatusText.color = Color.yellow;
             }
-            else if (success && status == LicenseStatus.GracePeriod)
+            else if (success && (status == LicenseStatus.GracePeriod || status == LicenseStatus.OfflineGrace))
             {
                 ShowLicensedPanel();
                 ShowGraceWarning();
@@ -153,6 +153,7 @@ namespace LTLM.SDK.Demos
                     break;
 
                 case LicenseStatus.GracePeriod:
+                case LicenseStatus.OfflineGrace:
                     activationStatusText.text = "License is in grace period";
                     activationStatusText.color = Color.yellow;
                     ShowLicensedPanel();

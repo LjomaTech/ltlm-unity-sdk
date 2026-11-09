@@ -1,13 +1,13 @@
 {
     "name": "io.ltlm.sdk",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "displayName": "LTLM SDK",
-    "description": "License & Token Management SDK for Unity. Manage software licenses, token-based usage, concurrent seats, and feature entitlements in your Unity applications.",
+    "description": "License & Token Management SDK for Unity. Manage software licenses, token-based usage, concurrent seats, offline grace and feature entitlements in your Unity applications.",
     "unity": "2020.3",
     "unityRelease": "0f1",
-    "documentationUrl": "https://github.com/ljomatech/ltlm-unity-sdk/tree/main/Assets/LTLM/Documentation~",
-    "changelogUrl": "https://github.com/ljomatech/ltlm-unity-sdk/blob/main/Assets/LTLM/CHANGELOG.md",
-    "licensesUrl": "https://github.com/ljomatech/ltlm-unity-sdk/blob/main/Assets/LTLM/LICENSE.md",
+    "documentationUrl": "https://github.com/LjomaTech/ltlm-unity-sdk/tree/main/Documentation~",
+    "changelogUrl": "https://github.com/LjomaTech/ltlm-unity-sdk/blob/main/CHANGELOG.md",
+    "licensesUrl": "https://github.com/LjomaTech/ltlm-unity-sdk/blob/main/LICENSE.md",
     "keywords": [
         "license",
         "licensing",
@@ -22,14 +22,18 @@
     ],
     "author": {
         "name": "Ljomatech",
-        "email": "support@ltlm.io",
-        "url": "https://ltlm.io"
+        "email": "support@ljomatech.com",
+        "url": "https://ltlm.ljomatech.com"
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/ljomatech/ltlm-unity-sdk.git"
+        "url": "https://github.com/LjomaTech/ltlm-unity-sdk.git"
     },
-    "dependencies": {},
+    "dependencies": {
+        "com.unity.nuget.newtonsoft-json": "3.2.1",
+        "com.unity.modules.unitywebrequest": "1.0.0",
+        "com.unity.modules.jsonserialize": "1.0.0"
+    },
     "samples": [
         {
             "displayName": "Demo Scripts",

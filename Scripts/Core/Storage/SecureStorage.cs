@@ -1,83 +1,112 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
-using UnityEngine;
 using LTLM.SDK.Core.Security;
+using UnityEngine;
 
 namespace LTLM.SDK.Core.Storage
 {
     /// <summary>
-    /// Handles encrypted file storage in PersistentDataPath.
-    /// Data is encrypted using a machine-specific key to prevent license sharing.
+    /// Encrypted file vault in <c>persistentDataPath/ltlm_vault</c>.
+    /// Data is encrypted with a machine-specific key so vault files cannot be copied between devices.
+    ///
+    /// <para><b>Integrity model:</b> every file has two markers in <see cref="PlatformStorage"/>
+    /// (<c>{file}_exists</c> and <c>{file}_hash</c>). If a file that should exist is missing, or its
+    /// content hash differs, <see cref="Load"/> returns <see cref="LTLMConstants.TamperedMarker"/>.
+    /// <see cref="Delete"/> removes the markers as well, so a legitimate sign-out never looks like tampering.</para>
+    ///
+    /// <para>Decrypted values are cached in memory; disk is only touched on the first load, on save and on delete.</para>
     /// </summary>
     public static class SecureStorage
     {
         private static string StoragePath => Path.Combine(Application.persistentDataPath, "ltlm_vault");
 
-        static SecureStorage()
+        private static readonly Dictionary<string, string> _cache = new Dictionary<string, string>();
+        private static bool _dirEnsured;
+
+        private static void EnsureDirectory()
         {
-            if (!Directory.Exists(StoragePath))
+            if (_dirEnsured) return;
+            try
             {
-                Directory.CreateDirectory(StoragePath);
+                if (!Directory.Exists(StoragePath)) Directory.CreateDirectory(StoragePath);
+                _dirEnsured = true;
+            }
+            catch (Exception ex)
+            {
+                LTLMLog.Error($"Cannot create vault directory: {ex.Message}");
             }
         }
 
+        private static string CacheKey(string fileName, string projectId) => projectId + "\n" + fileName;
+
         /// <summary>
         /// Saves encrypted data to a file with anti-tamper markers.
-        /// Data is encrypted using a machine-specific key (derived from HWID).
-        /// 
-        /// <para><b>Security Features:</b></para>
-        /// <list type="bullet">
-        ///   <item>AES-256-CBC encryption with HWID-derived key</item>
-        ///   <item>Cross-platform tamper detection via PlatformStorage</item>
-        ///   <item>MD5 hash verification on load</item>
-        /// </list>
         /// </summary>
         /// <param name="fileName">The name of the file to save (without path).</param>
         /// <param name="plainText">The plaintext data to encrypt and save.</param>
         /// <param name="machineKey">The machine-specific key (usually HWID).</param>
-        /// <param name="projectId">Optional project ID for marker isolation. Defaults to "global".</param>
+        /// <param name="projectId">Project ID used to scope the integrity markers. Defaults to "global".</param>
         public static void Save(string fileName, string plainText, string machineKey, string projectId = "global")
         {
             try
             {
-                byte[] data = Encoding.UTF8.GetBytes(plainText);
+                EnsureDirectory();
+                byte[] data = Encoding.UTF8.GetBytes(plainText ?? string.Empty);
                 byte[] key = DeriveKey(machineKey);
                 byte[] encrypted = Encrypt(data, key);
-                
+
                 File.WriteAllBytes(Path.Combine(StoragePath, fileName), encrypted);
 
-                // Anti-Tamper: Use cross-platform PlatformStorage for markers
                 string hash = HashHelper.ComputeMD5(encrypted);
                 PlatformStorage.SetMarker(projectId, fileName + "_hash", hash);
                 PlatformStorage.SetMarker(projectId, fileName + "_exists", "true");
+
+                _cache[CacheKey(fileName, projectId)] = plainText;
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[LTLM] Storage Save Error: {ex.Message}");
+                LTLMLog.Error($"Storage Save Error: {ex.Message}");
             }
         }
 
         /// <summary>
         /// Loads and decrypts data from a file.
-        /// Returns "TAMPERED" if file integrity check fails (deletion or modification detected).
         /// </summary>
-        /// <param name="fileName">The name of the file to load (without path).</param>
-        /// <param name="machineKey">The machine-specific key (usually HWID).</param>
-        /// <param name="projectId">Optional project ID for marker isolation. Defaults to "global".</param>
-        /// <returns>The decrypted plaintext, "TAMPERED" if tampered, or null if not found.</returns>
+        /// <returns>The decrypted plaintext, <see cref="LTLMConstants.TamperedMarker"/> if integrity failed, or null if not found.</returns>
         public static string Load(string fileName, string machineKey, string projectId = "global")
+        {
+            string cacheKey = CacheKey(fileName, projectId);
+            if (_cache.TryGetValue(cacheKey, out var cached)) return cached;
+
+            string result = LoadFromDisk(fileName, machineKey, projectId);
+            if (result != null && result != LTLMConstants.TamperedMarker)
+                _cache[cacheKey] = result;
+            return result;
+        }
+
+        /// <summary>
+        /// Like <see cref="Load"/> but returns null instead of the tampered marker, and reports tampering separately.
+        /// </summary>
+        public static string TryLoad(string fileName, string machineKey, string projectId, out bool tampered)
+        {
+            string value = Load(fileName, machineKey, projectId);
+            tampered = value == LTLMConstants.TamperedMarker;
+            return tampered ? null : value;
+        }
+
+        private static string LoadFromDisk(string fileName, string machineKey, string projectId)
         {
             try
             {
                 string path = Path.Combine(StoragePath, fileName);
-                
-                // Anti-Tamper Check using cross-platform PlatformStorage
+
                 if (HasBeenTampered(fileName, projectId))
                 {
-                    Debug.LogError($"[LTLM] SECURITY ALERT: Local file '{fileName}' has been tampered with or deleted!");
-                    return "TAMPERED";
+                    LTLMLog.Error($"SECURITY ALERT: Local file '{fileName}' has been tampered with or deleted!");
+                    return LTLMConstants.TamperedMarker;
                 }
 
                 if (!File.Exists(path)) return null;
@@ -85,37 +114,30 @@ namespace LTLM.SDK.Core.Storage
                 byte[] encrypted = File.ReadAllBytes(path);
                 byte[] key = DeriveKey(machineKey);
                 byte[] decrypted = Decrypt(encrypted, key);
-
                 return Encoding.UTF8.GetString(decrypted);
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[LTLM] Storage Load Error (Corrupt or Key Mismatch): {ex.Message}");
+                LTLMLog.Warn($"Storage Load Error for '{fileName}' (corrupt or key mismatch): {ex.Message}");
                 return null;
             }
         }
 
-        /// <summary>
-        /// Checks if a stored file has been tampered with (deleted or modified).
-        /// Uses cross-platform PlatformStorage for marker verification.
-        /// </summary>
         private static bool HasBeenTampered(string fileName, string projectId)
         {
             string path = Path.Combine(StoragePath, fileName);
-            
-            // Use cross-platform PlatformStorage for marker retrieval
+
             string markerExists = PlatformStorage.GetMarker(projectId, fileName + "_exists");
             string markerHash = PlatformStorage.GetMarker(projectId, fileName + "_hash");
 
-            // If markers themselves indicate tampering (from PlatformStorage HMAC check)
-            if (markerExists == "TAMPERED" || markerHash == "TAMPERED") return true;
+            if (markerExists == LTLMConstants.TamperedMarker || markerHash == LTLMConstants.TamperedMarker) return true;
 
             bool fileExists = File.Exists(path);
 
-            // 1. Deletion Check: If markers say it should exist but file is gone
+            // Deletion check: markers say the file should exist but it is gone.
             if (markerExists == "true" && !fileExists) return true;
 
-            // 2. Content Check: If file exists, verify MD5 against stored marker
+            // Content check: hash of the encrypted bytes must match the marker.
             if (fileExists && !string.IsNullOrEmpty(markerHash))
             {
                 byte[] encrypted = File.ReadAllBytes(path);
@@ -126,19 +148,22 @@ namespace LTLM.SDK.Core.Storage
             return false;
         }
 
-        public static void Delete(string fileName)
+        /// <summary>Deletes a vault file and its integrity markers.</summary>
+        public static void Delete(string fileName, string projectId = "global")
         {
-            string path = Path.Combine(StoragePath, fileName);
-            if (File.Exists(path)) File.Delete(path);
-        }
+            try
+            {
+                string path = Path.Combine(StoragePath, fileName);
+                if (File.Exists(path)) File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                LTLMLog.Warn($"Storage Delete Error for '{fileName}': {ex.Message}");
+            }
 
-        /// <summary>
-        /// Deletes a stored file. The machineKey parameter is accepted for API consistency
-        /// with Save/Load but is not used for deletion (files are not encrypted differently per machine).
-        /// </summary>
-        public static void Delete(string fileName, string machineKey)
-        {
-            Delete(fileName);
+            PlatformStorage.RemoveMarker(projectId, fileName + "_exists");
+            PlatformStorage.RemoveMarker(projectId, fileName + "_hash");
+            _cache.Remove(CacheKey(fileName, projectId));
         }
 
         public static bool Exists(string fileName)
@@ -146,14 +171,16 @@ namespace LTLM.SDK.Core.Storage
             return File.Exists(Path.Combine(StoragePath, fileName));
         }
 
+        /// <summary>Drops the in-memory cache (tests / diagnostics).</summary>
+        public static void InvalidateCache() => _cache.Clear();
+
         #region Encryption Logic
 
         private static byte[] DeriveKey(string machineKey)
         {
-            // Simple key derivation from HWID/MachineKey
             using (SHA256 sha256 = SHA256.Create())
             {
-                return sha256.ComputeHash(Encoding.UTF8.GetBytes(machineKey));
+                return sha256.ComputeHash(Encoding.UTF8.GetBytes(machineKey ?? string.Empty));
             }
         }
 
@@ -179,6 +206,7 @@ namespace LTLM.SDK.Core.Storage
 
         private static byte[] Decrypt(byte[] data, byte[] key)
         {
+            if (data == null || data.Length < 16) throw new CryptographicException("Vault file too short.");
             using (Aes aes = Aes.Create())
             {
                 aes.Key = key;

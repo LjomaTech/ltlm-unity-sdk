@@ -1,21 +1,26 @@
 using System;
 using LTLM.SDK.Core.Storage;
 using LTLM.SDK.Core.Hardware;
-using UnityEngine;
 
 namespace LTLM.SDK.Core.Security
 {
     /// <summary>
-    /// Implements a Monotonic Secure Clock to prevent license bypass via system clock rollback.
-    /// It keeps track of the 'Last Known Secure Time' in encrypted storage.
+    /// Monotonic secure clock that prevents license bypass via system clock rollback.
+    /// Keeps a "last known good time" watermark in the encrypted vault and refuses to move backwards.
+    /// The watermark is persisted at most once per minute to avoid hammering the disk.
     /// </summary>
     public static class SecureClock
     {
         private const string STORE_KEY = "last_known_secure_time";
+        private static readonly TimeSpan PersistInterval = TimeSpan.FromMinutes(1);
+
+        private static DateTime _lastPersisted = DateTime.MinValue;
+        private static DateTime _memoryWatermark = DateTime.MinValue;
+        private static string _loadedForProject;
 
         /// <summary>
-        /// Gets the most reliable current time. 
-        /// If the system clock has been rolled back, it returns the last known good time.
+        /// Gets the most reliable current time (UTC).
+        /// If the system clock has been rolled back, returns the last known good time instead.
         /// </summary>
         public static DateTime GetEffectiveTime(string projectId)
         {
@@ -24,18 +29,15 @@ namespace LTLM.SDK.Core.Security
 
             if (systemTime < storedTime)
             {
-                Debug.LogWarning("[LTLM] CLOCK TAMPERING DETECTED. System clock is earlier than last known secure time.");
-                return storedTime; // Pessimistic drift protection
+                LTLMLog.Warn("CLOCK TAMPERING DETECTED. System clock is earlier than last known secure time.");
+                return storedTime;
             }
 
-            // Clock seems fine, update the watermark
             UpdateLastKnownTime(projectId, systemTime);
             return systemTime;
         }
 
-        /// <summary>
-        /// Checks if the system clock is currently suspicious compared to persistent logs.
-        /// </summary>
+        /// <summary>True when the system clock is behind the persisted watermark.</summary>
         public static bool IsClockTampered(string projectId)
         {
             return DateTime.UtcNow < GetLastKnownTime(projectId);
@@ -43,21 +45,41 @@ namespace LTLM.SDK.Core.Security
 
         private static DateTime GetLastKnownTime(string projectId)
         {
+            if (_loadedForProject == projectId && _memoryWatermark != DateTime.MinValue)
+                return _memoryWatermark;
+
             string key = $"{STORE_KEY}_{projectId}";
             string raw = SecureStorage.Load(key, DeviceID.GetHWID(), projectId);
-            
+
+            _loadedForProject = projectId;
             if (long.TryParse(raw, out long ticks))
-            {
-                return new DateTime(ticks, DateTimeKind.Utc);
-            }
-            
-            return DateTime.MinValue;
+                _memoryWatermark = new DateTime(ticks, DateTimeKind.Utc);
+            else
+                _memoryWatermark = DateTime.MinValue;
+
+            return _memoryWatermark;
         }
 
         private static void UpdateLastKnownTime(string projectId, DateTime current)
         {
+            if (current <= _memoryWatermark) return;
+            _memoryWatermark = current;
+            _loadedForProject = projectId;
+
+            if (current - _lastPersisted < PersistInterval) return;
+            _lastPersisted = current;
+
             string key = $"{STORE_KEY}_{projectId}";
             SecureStorage.Save(key, current.Ticks.ToString(), DeviceID.GetHWID(), projectId);
+        }
+
+        /// <summary>Forces the watermark to be written now (called on quit / sign-out).</summary>
+        public static void Flush(string projectId)
+        {
+            if (_memoryWatermark == DateTime.MinValue) return;
+            string key = $"{STORE_KEY}_{projectId}";
+            SecureStorage.Save(key, _memoryWatermark.Ticks.ToString(), DeviceID.GetHWID(), projectId);
+            _lastPersisted = _memoryWatermark;
         }
     }
 }

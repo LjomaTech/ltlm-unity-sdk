@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -9,26 +10,33 @@ namespace LTLM.SDK.Core.Storage
 {
     /// <summary>
     /// Cross-platform secure marker storage for anti-tamper detection.
-    /// Provides platform-specific implementations for storing integrity markers.
-    /// 
-    /// <para><b>Supported Platforms:</b></para>
+    /// Markers mirror the state of the encrypted vault so that deleting or editing vault files is detectable.
+    ///
+    /// <para><b>Backends:</b></para>
     /// <list type="bullet">
-    ///   <item><b>Windows</b>: Registry-based storage (most secure)</item>
-    ///   <item><b>macOS</b>: Application Support file with HMAC signature</item>
-    ///   <item><b>Linux</b>: XDG config directory with HMAC signature</item>
-    ///   <item><b>Android</b>: Internal storage file with HMAC signature</item>
-    ///   <item><b>iOS</b>: Application Support file with HMAC signature</item>
-    ///   <item><b>WebGL</b>: PlayerPrefs fallback (no tamper detection)</item>
+    ///   <item><b>Windows</b>: HKCU registry</item>
+    ///   <item><b>macOS / Linux / Android / iOS</b>: HMAC-signed JSON file outside the vault folder</item>
+    ///   <item><b>WebGL</b>: PlayerPrefs (no tamper detection possible)</item>
     /// </list>
+    ///
+    /// All reads are served from an in-memory cache after the first access; writes are write-through.
     /// </summary>
     public static class PlatformStorage
     {
         private static string _markerPath;
-        private static bool _initialized = false;
+        private static bool _initialized;
 
-        /// <summary>
-        /// Initializes the platform storage system. Called automatically on first use.
-        /// </summary>
+        // projectId -> marker data (file backend cache)
+        private static readonly Dictionary<string, MarkerData> _fileCache = new Dictionary<string, MarkerData>();
+        // projectId -> tampered flag (file backend)
+        private static readonly HashSet<string> _tamperedProjects = new HashSet<string>();
+        // "projectId\nkey" -> value (registry / PlayerPrefs cache)
+        private static readonly Dictionary<string, string> _kvCache = new Dictionary<string, string>();
+
+        private enum Backend { Registry, PlayerPrefs, File }
+
+        private static Backend _backend;
+
         private static void Initialize()
         {
             if (_initialized) return;
@@ -37,251 +45,246 @@ namespace LTLM.SDK.Core.Storage
             {
                 case RuntimePlatform.WindowsPlayer:
                 case RuntimePlatform.WindowsEditor:
-                    // Windows uses registry via LTLMRegistryHelper - no file path needed
-                    _markerPath = null;
+                    _backend = LTLMRegistryHelper.IsSupported ? Backend.Registry : Backend.File;
+                    _markerPath = Path.Combine(Application.persistentDataPath, ".ltlm_markers");
                     break;
 
                 case RuntimePlatform.OSXPlayer:
                 case RuntimePlatform.OSXEditor:
-                    // macOS: ~/Library/Application Support/LTLM/
+                    _backend = Backend.File;
                     _markerPath = Path.Combine(
                         Environment.GetFolderPath(Environment.SpecialFolder.Personal),
-                        "Library", "Application Support", "LTLM"
-                    );
+                        "Library", "Application Support", "LTLM");
                     break;
 
                 case RuntimePlatform.LinuxPlayer:
                 case RuntimePlatform.LinuxEditor:
-                    // Linux: ~/.config/LTLM/ (XDG_CONFIG_HOME fallback)
+                    _backend = Backend.File;
                     string xdgConfig = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
                     if (string.IsNullOrEmpty(xdgConfig))
-                    {
                         xdgConfig = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Personal), ".config");
-                    }
                     _markerPath = Path.Combine(xdgConfig, "LTLM");
                     break;
 
-                case RuntimePlatform.Android:
-                    // Android: Application.persistentDataPath is already sandboxed
-                    _markerPath = Path.Combine(Application.persistentDataPath, ".ltlm_markers");
-                    break;
-
-                case RuntimePlatform.IPhonePlayer:
-                    // iOS: Documents directory
-                    _markerPath = Path.Combine(Application.persistentDataPath, ".ltlm_markers");
-                    break;
-
                 case RuntimePlatform.WebGLPlayer:
-                    // WebGL: No file access, will use PlayerPrefs
+                    _backend = Backend.PlayerPrefs;
                     _markerPath = null;
-                    Debug.LogWarning("[LTLM] WebGL platform detected. Using PlayerPrefs for markers (no tamper detection available).");
+                    LTLMLog.Warn("WebGL platform detected. Using PlayerPrefs for markers (no tamper detection available).");
                     break;
 
                 default:
-                    // Fallback for unknown platforms
+                    // Android, iOS, consoles, unknown: sandboxed persistentDataPath
+                    _backend = Backend.File;
                     _markerPath = Path.Combine(Application.persistentDataPath, ".ltlm_markers");
                     break;
             }
 
-            // Create directory if needed
-            if (!string.IsNullOrEmpty(_markerPath) && !Directory.Exists(_markerPath))
+            if (_backend == Backend.File && !string.IsNullOrEmpty(_markerPath) && !Directory.Exists(_markerPath))
             {
-                try
-                {
-                    Directory.CreateDirectory(_markerPath);
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"[LTLM] Failed to create marker directory: {ex.Message}");
-                }
+                try { Directory.CreateDirectory(_markerPath); }
+                catch (Exception ex) { LTLMLog.Warn($"Failed to create marker directory: {ex.Message}"); }
             }
 
             _initialized = true;
         }
 
-        /// <summary>
-        /// Stores a security marker for the specified project.
-        /// </summary>
-        /// <param name="projectId">The project identifier.</param>
-        /// <param name="key">The marker key (e.g., "license_cache_hash").</param>
-        /// <param name="value">The marker value.</param>
+        /// <summary>Human readable backend name, for diagnostics.</summary>
+        public static string BackendName
+        {
+            get
+            {
+                Initialize();
+                return _backend.ToString();
+            }
+        }
+
         public static void SetMarker(string projectId, string key, string value)
         {
             Initialize();
+            projectId = projectId ?? "global";
 
-            // Windows: Use registry
-            if (Application.platform == RuntimePlatform.WindowsPlayer || 
-                Application.platform == RuntimePlatform.WindowsEditor)
+            switch (_backend)
             {
-                LTLMRegistryHelper.SetMarker(projectId, key, value);
-                return;
+                case Backend.Registry:
+                    LTLMRegistryHelper.SetMarker(projectId, key, value);
+                    _kvCache[projectId + "\n" + key] = value;
+                    return;
+                case Backend.PlayerPrefs:
+                    PlayerPrefs.SetString($"LTLM_{projectId}_{key}", value ?? string.Empty);
+                    PlayerPrefs.Save();
+                    _kvCache[projectId + "\n" + key] = value;
+                    return;
+                default:
+                    SetFileMarker(projectId, key, value);
+                    return;
             }
-
-            // WebGL: Use PlayerPrefs
-            if (Application.platform == RuntimePlatform.WebGLPlayer)
-            {
-                string ppKey = $"LTLM_{projectId}_{key}";
-                PlayerPrefs.SetString(ppKey, value);
-                PlayerPrefs.Save();
-                return;
-            }
-
-            // All other platforms: File-based with HMAC signature
-            SetFileMarker(projectId, key, value);
         }
 
-        /// <summary>
-        /// Retrieves a security marker for the specified project.
-        /// </summary>
-        /// <param name="projectId">The project identifier.</param>
-        /// <param name="key">The marker key.</param>
-        /// <returns>The marker value, or null if not found or tampered.</returns>
+        /// <summary>Returns the marker value, null if absent, or "TAMPERED" when the marker store failed integrity checks.</summary>
         public static string GetMarker(string projectId, string key)
         {
             Initialize();
+            projectId = projectId ?? "global";
 
-            // Windows: Use registry
-            if (Application.platform == RuntimePlatform.WindowsPlayer || 
-                Application.platform == RuntimePlatform.WindowsEditor)
+            switch (_backend)
             {
-                return LTLMRegistryHelper.GetMarker(projectId, key);
+                case Backend.Registry:
+                {
+                    string cacheKey = projectId + "\n" + key;
+                    if (_kvCache.TryGetValue(cacheKey, out var cached)) return cached;
+                    string v = LTLMRegistryHelper.GetMarker(projectId, key);
+                    _kvCache[cacheKey] = v;
+                    return v;
+                }
+                case Backend.PlayerPrefs:
+                {
+                    string cacheKey = projectId + "\n" + key;
+                    if (_kvCache.TryGetValue(cacheKey, out var cached)) return cached;
+                    string ppKey = $"LTLM_{projectId}_{key}";
+                    string v = PlayerPrefs.HasKey(ppKey) ? PlayerPrefs.GetString(ppKey) : null;
+                    _kvCache[cacheKey] = v;
+                    return v;
+                }
+                default:
+                    return GetFileMarker(projectId, key);
             }
-
-            // WebGL: Use PlayerPrefs
-            if (Application.platform == RuntimePlatform.WebGLPlayer)
-            {
-                string ppKey = $"LTLM_{projectId}_{key}";
-                return PlayerPrefs.GetString(ppKey, null);
-            }
-
-            // All other platforms: File-based with HMAC verification
-            return GetFileMarker(projectId, key);
         }
 
-        /// <summary>
-        /// Clears all markers for the specified project.
-        /// </summary>
-        /// <param name="projectId">The project identifier.</param>
+        public static void RemoveMarker(string projectId, string key)
+        {
+            Initialize();
+            projectId = projectId ?? "global";
+
+            switch (_backend)
+            {
+                case Backend.Registry:
+                    LTLMRegistryHelper.RemoveMarker(projectId, key);
+                    _kvCache.Remove(projectId + "\n" + key);
+                    return;
+                case Backend.PlayerPrefs:
+                    PlayerPrefs.DeleteKey($"LTLM_{projectId}_{key}");
+                    PlayerPrefs.Save();
+                    _kvCache.Remove(projectId + "\n" + key);
+                    return;
+                default:
+                    RemoveFileMarker(projectId, key);
+                    return;
+            }
+        }
+
+        /// <summary>Clears all markers for the specified project.</summary>
         public static void ClearMarkers(string projectId)
         {
             Initialize();
+            projectId = projectId ?? "global";
 
-            // Windows: Use registry
-            if (Application.platform == RuntimePlatform.WindowsPlayer || 
-                Application.platform == RuntimePlatform.WindowsEditor)
+            switch (_backend)
             {
-                LTLMRegistryHelper.Clear(projectId);
-                return;
+                case Backend.Registry:
+                    LTLMRegistryHelper.Clear(projectId);
+                    break;
+                case Backend.PlayerPrefs:
+                    // PlayerPrefs cannot be enumerated; drop the keys we know about from the cache.
+                    foreach (var k in new List<string>(_kvCache.Keys))
+                    {
+                        if (!k.StartsWith(projectId + "\n")) continue;
+                        PlayerPrefs.DeleteKey($"LTLM_{projectId}_{k.Substring(projectId.Length + 1)}");
+                    }
+                    PlayerPrefs.Save();
+                    break;
+                default:
+                    try
+                    {
+                        string filePath = Path.Combine(_markerPath, $"{projectId}.markers");
+                        if (File.Exists(filePath)) File.Delete(filePath);
+                    }
+                    catch (Exception ex) { LTLMLog.Warn($"Failed to clear markers: {ex.Message}"); }
+                    _fileCache.Remove(projectId);
+                    _tamperedProjects.Remove(projectId);
+                    break;
             }
 
-            // WebGL: Clear PlayerPrefs (can't enumerate, so just clear known keys)
-            if (Application.platform == RuntimePlatform.WebGLPlayer)
-            {
-                // Known marker keys
-                string[] knownKeys = { "_hash", "_exists" };
-                foreach (var suffix in knownKeys)
-                {
-                    PlayerPrefs.DeleteKey($"LTLM_{projectId}{suffix}");
-                }
-                PlayerPrefs.Save();
-                return;
-            }
-
-            // All other platforms: Delete marker file
-            try
-            {
-                string filePath = Path.Combine(_markerPath, $"{projectId}.markers");
-                if (File.Exists(filePath))
-                {
-                    File.Delete(filePath);
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[LTLM] Failed to clear markers: {ex.Message}");
-            }
+            var prefix = projectId + "\n";
+            foreach (var k in new List<string>(_kvCache.Keys))
+                if (k.StartsWith(prefix)) _kvCache.Remove(k);
         }
 
-        #region File-Based Implementation (macOS, Linux, Android, iOS)
+        #region File-Based Implementation
 
-        /// <summary>
-        /// Stores a marker in a file with HMAC signature for tamper detection.
-        /// File format: JSON object with data and HMAC signature.
-        /// </summary>
-        private static void SetFileMarker(string projectId, string key, string value)
+        private static MarkerData LoadFileData(string projectId)
+        {
+            if (_fileCache.TryGetValue(projectId, out var cached)) return cached;
+
+            var data = new MarkerData();
+            if (!string.IsNullOrEmpty(_markerPath))
+            {
+                try
+                {
+                    string filePath = Path.Combine(_markerPath, $"{projectId}.markers");
+                    if (File.Exists(filePath))
+                    {
+                        string json = File.ReadAllText(filePath);
+                        var loaded = JsonUtility.FromJson<MarkerData>(json);
+                        if (loaded != null)
+                        {
+                            string expected = ComputeHMAC(loaded.GetDataString(), GetDeviceKey());
+                            if (loaded.signature != expected)
+                            {
+                                LTLMLog.Error("SECURITY ALERT: Marker file has been tampered with!");
+                                _tamperedProjects.Add(projectId);
+                            }
+                            data = loaded;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LTLMLog.Warn($"Failed to read marker file: {ex.Message}");
+                }
+            }
+
+            _fileCache[projectId] = data;
+            return data;
+        }
+
+        private static void SaveFileData(string projectId, MarkerData data)
         {
             if (string.IsNullOrEmpty(_markerPath)) return;
-
             try
             {
-                string filePath = Path.Combine(_markerPath, $"{projectId}.markers");
-                MarkerData data;
-
-                // Load existing data or create new
-                if (File.Exists(filePath))
-                {
-                    string existingJson = File.ReadAllText(filePath);
-                    data = JsonUtility.FromJson<MarkerData>(existingJson) ?? new MarkerData();
-                }
-                else
-                {
-                    data = new MarkerData();
-                }
-
-                // Update the specific key
-                data.SetValue(key, value);
-
-                // Recalculate HMAC for the entire data set
                 data.signature = ComputeHMAC(data.GetDataString(), GetDeviceKey());
-
-                // Save
-                string json = JsonUtility.ToJson(data, false);
-                File.WriteAllText(filePath, json);
+                string filePath = Path.Combine(_markerPath, $"{projectId}.markers");
+                File.WriteAllText(filePath, JsonUtility.ToJson(data, false));
+                // A freshly written file is by definition intact.
+                _tamperedProjects.Remove(projectId);
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[LTLM] Failed to set file marker: {ex.Message}");
+                LTLMLog.Warn($"Failed to write marker file: {ex.Message}");
             }
         }
 
-        /// <summary>
-        /// Retrieves a marker from file, verifying HMAC signature.
-        /// Returns "TAMPERED" if signature verification fails.
-        /// </summary>
+        private static void SetFileMarker(string projectId, string key, string value)
+        {
+            var data = LoadFileData(projectId);
+            data.SetValue(key, value ?? string.Empty);
+            SaveFileData(projectId, data);
+        }
+
+        private static void RemoveFileMarker(string projectId, string key)
+        {
+            var data = LoadFileData(projectId);
+            if (!data.Remove(key)) return;
+            SaveFileData(projectId, data);
+        }
+
         private static string GetFileMarker(string projectId, string key)
         {
-            if (string.IsNullOrEmpty(_markerPath)) return null;
-
-            try
-            {
-                string filePath = Path.Combine(_markerPath, $"{projectId}.markers");
-                if (!File.Exists(filePath)) return null;
-
-                string json = File.ReadAllText(filePath);
-                MarkerData data = JsonUtility.FromJson<MarkerData>(json);
-
-                if (data == null) return null;
-
-                // Verify HMAC signature
-                string expectedHmac = ComputeHMAC(data.GetDataString(), GetDeviceKey());
-                if (data.signature != expectedHmac)
-                {
-                    Debug.LogError("[LTLM] SECURITY ALERT: Marker file has been tampered with!");
-                    return "TAMPERED";
-                }
-
-                return data.GetValue(key);
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[LTLM] Failed to get file marker: {ex.Message}");
-                return null;
-            }
+            var data = LoadFileData(projectId);
+            if (_tamperedProjects.Contains(projectId)) return LTLMConstants.TamperedMarker;
+            return data.GetValue(key);
         }
 
-        /// <summary>
-        /// Computes HMAC-SHA256 for tamper detection.
-        /// </summary>
         private static string ComputeHMAC(string data, string key)
         {
             using (var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(key)))
@@ -291,29 +294,23 @@ namespace LTLM.SDK.Core.Storage
             }
         }
 
-        /// <summary>
-        /// Gets a device-specific key for HMAC signing.
-        /// Combines multiple hardware signals to create a stable device fingerprint.
-        /// </summary>
+        private static string _deviceKey;
+
         private static string GetDeviceKey()
         {
-            // Use Unity's device unique identifier combined with application ID
+            if (_deviceKey != null) return _deviceKey;
             string combinedKey = $"{SystemInfo.deviceUniqueIdentifier}_{Application.identifier}_{Application.companyName}";
-            
             using (SHA256 sha256 = SHA256.Create())
             {
-                byte[] hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(combinedKey));
-                return Convert.ToBase64String(hash);
+                _deviceKey = Convert.ToBase64String(sha256.ComputeHash(Encoding.UTF8.GetBytes(combinedKey)));
             }
+            return _deviceKey;
         }
 
         #endregion
 
         #region Marker Data Structure
 
-        /// <summary>
-        /// Internal data structure for file-based marker storage.
-        /// </summary>
         [Serializable]
         private class MarkerData
         {
@@ -327,15 +324,25 @@ namespace LTLM.SDK.Core.Storage
                 if (index >= 0)
                 {
                     values[index] = value;
+                    return;
                 }
-                else
-                {
-                    // Add new key-value pair
-                    Array.Resize(ref keys, keys.Length + 1);
-                    Array.Resize(ref values, values.Length + 1);
-                    keys[keys.Length - 1] = key;
-                    values[values.Length - 1] = value;
-                }
+                Array.Resize(ref keys, keys.Length + 1);
+                Array.Resize(ref values, values.Length + 1);
+                keys[keys.Length - 1] = key;
+                values[values.Length - 1] = value;
+            }
+
+            public bool Remove(string key)
+            {
+                int index = Array.IndexOf(keys, key);
+                if (index < 0) return false;
+                var newKeys = new List<string>(keys);
+                var newValues = new List<string>(values);
+                newKeys.RemoveAt(index);
+                newValues.RemoveAt(index);
+                keys = newKeys.ToArray();
+                values = newValues.ToArray();
+                return true;
             }
 
             public string GetValue(string key)
@@ -346,11 +353,9 @@ namespace LTLM.SDK.Core.Storage
 
             public string GetDataString()
             {
-                StringBuilder sb = new StringBuilder();
+                var sb = new StringBuilder();
                 for (int i = 0; i < keys.Length; i++)
-                {
-                    sb.Append(keys[i]).Append("=").Append(values[i]).Append(";");
-                }
+                    sb.Append(keys[i]).Append('=').Append(values[i]).Append(';');
                 return sb.ToString();
             }
         }

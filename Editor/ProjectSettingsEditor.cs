@@ -179,15 +179,45 @@ namespace LTLM.SDK.Editor
             
             // Action buttons
             EditorGUILayout.BeginHorizontal();
-            
-            
+
             if (GUILayout.Button("Save Settings"))
             {
                 SaveSettings(settings);
                 _status = "Settings saved to disk.";
             }
-            
+
+            EditorGUI.BeginDisabledGroup(_isTestingConnection);
+            if (GUILayout.Button(_isTestingConnection ? "Testing..." : "Test Connection"))
+            {
+                TestBackendConnection(settings);
+            }
+            EditorGUI.EndDisabledGroup();
+
             EditorGUILayout.EndHorizontal();
+
+            // Network / diagnostics
+            EditorGUILayout.Space(5);
+            EditorGUILayout.LabelField("Network & Diagnostics", EditorStyles.boldLabel);
+            EditorGUI.BeginChangeCheck();
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            settings.backendUrlOverride = EditorGUILayout.TextField(
+                new GUIContent("Backend URL Override", "Leave empty for the LTLM cloud. Set for self-hosted/staging."),
+                settings.backendUrlOverride);
+            settings.requestTimeoutSeconds = EditorGUILayout.IntSlider(
+                new GUIContent("Request Timeout (s)"), settings.requestTimeoutSeconds, 5, 120);
+            settings.maxResponseAgeSeconds = EditorGUILayout.IntField(
+                new GUIContent("Max Response Age (s)", "0 = disabled. Rejects replayed responses older than this."),
+                settings.maxResponseAgeSeconds);
+            settings.verboseLogging = EditorGUILayout.Toggle(
+                new GUIContent("Verbose Logging", "Prints request/response bodies. Never ship with this on."),
+                settings.verboseLogging);
+
+            EditorGUILayout.EndVertical();
+            if (EditorGUI.EndChangeCheck()) SaveSettings(settings);
+
+            if (settings.verboseLogging)
+                EditorGUILayout.HelpBox("Verbose logging is ON. License data will be written to player logs. Disable before release.", MessageType.Warning);
         }
 
         private void DrawDeveloperLogin(LTLM.SDK.Core.LTLMSettings settings)
@@ -385,8 +415,9 @@ namespace LTLM.SDK.Editor
             _isTestingConnection = true;
             _status = "Testing connection...";
             
-            string url = LTLM.SDK.Core.LTLMConstants.BackendUrl.TrimEnd('/') + "/health";
+            string url = settings.ResolvedBackendUrl + "/v1/system/health";
             var webRequest = UnityWebRequest.Get(url);
+            webRequest.timeout = 10;
             
             var operation = webRequest.SendWebRequest();
             
@@ -396,9 +427,10 @@ namespace LTLM.SDK.Editor
                 if (operation.isDone)
                 {
                     _isTestingConnection = false;
-                    if (webRequest.result == UnityWebRequest.Result.Success)
+                    // Any HTTP answer (even 404) proves the host is reachable; only transport errors are failures.
+                    if (webRequest.result == UnityWebRequest.Result.Success || webRequest.responseCode > 0)
                     {
-                        _status = "✓ Backend connection successful!";
+                        _status = $"✓ Backend reachable at {settings.ResolvedBackendUrl} (HTTP {webRequest.responseCode})";
                     }
                     else
                     {
@@ -454,7 +486,7 @@ namespace LTLM.SDK.Editor
             };
 
             string json = JsonUtility.ToJson(requestData);
-            string url = LTLM.SDK.Core.LTLMConstants.BackendUrl.TrimEnd('/') + "/v1/sdk/pro/auth/dev-login";
+            string url = settings.ResolvedBackendUrl + "/v1/sdk/pro/auth/dev-login";
 
             var webRequest = new UnityWebRequest(url, "POST");
             byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(json);
@@ -553,7 +585,7 @@ namespace LTLM.SDK.Editor
 
             // Backend expects mfaToken from initial login response
             string json = $"{{\"mfaToken\":\"{_mfaToken}\",\"otp\":\"{_mfaOtp}\"}}";
-            string url = LTLM.SDK.Core.LTLMConstants.BackendUrl.TrimEnd('/') + "/v1/sdk/pro/auth/dev-login/verify-otp";
+            string url = settings.ResolvedBackendUrl + "/v1/sdk/pro/auth/dev-login/verify-otp";
 
             var webRequest = new UnityWebRequest(url, "POST");
             byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(json);
